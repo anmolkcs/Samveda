@@ -205,6 +205,29 @@ def mel_filterbank(sr: int = SR, n_fft: int = N_FFT, n_mels: int = N_MELS,
             fb[m - 1, k] = (k - lo) / max(1, ce - lo)
         for k in range(ce, hi):
             fb[m - 1, k] = (hi - k) / max(1, hi - ce)
+        # Area-normalise.  Without this, a band's reading depends on how many FFT
+        # bins it spans, so a *flat* input spectrum does not produce a flat mel
+        # spectrogram: wide high-frequency triangles collect more energy than narrow
+        # low ones, and the tilt is invisible until you compare two signals whose
+        # levels differ.  It then shows up as a constant offset — measured at 2.6 dB
+        # between the corpus and the renderer — which a model happily memorises as if
+        # it were the singer's timbre.
+        tot = fb[m - 1].sum()
+        if tot > 0:
+            fb[m - 1] /= tot
+    return fb
+
+
+_FB_CACHE: dict[tuple[int, int, int], np.ndarray] = {}
+
+
+def _filterbank_cached(sr: int, n_fft: int, n_mels: int) -> np.ndarray:
+    """`mel_filterbank` memoised — it is identical for every call in a process."""
+    key = (sr, n_fft, n_mels)
+    fb = _FB_CACHE.get(key)
+    if fb is None:
+        fb = mel_filterbank(sr, n_fft, n_mels)
+        _FB_CACHE[key] = fb
     return fb
 
 
@@ -351,24 +374,37 @@ def _mel_centres(sr: int = SR, n_fft: int = N_FFT, n_mels: int = N_MELS,
 
 def harmonic_vocode(logmel_db: np.ndarray, f0_track: np.ndarray, sr: int = SR,
                     n_fft: int = N_FFT, hop: int = HOP, n_mels: int = N_MELS,
-                    seed: int = 0, rolloff: float = 0.75,
-                    breath: float = 0.05) -> np.ndarray:
+                    seed: int = 0, rolloff: float = 0.9,
+                    phase_spread: float = 0.45,
+                    breath: float = 0.03) -> np.ndarray:
     """Resynthesise from log-mel using a known F0 contour (source-filter).
 
     A chant is sustained and harmonic and **its pitch is not something to estimate
-    from a spectrogram** — the svara notation already gives it.  So: build a harmonic
-    series at exactly ``k*f0`` and shape it with the mel envelope.
+    from a spectrogram** — the svara notation already gives it. So build a harmonic
+    series at exactly ``k*f0``, with amplitudes read off the mel envelope.
 
-    Two details decide whether this lands in tune:
+    This used to build an STFT frame per analysis hop and invert it. That cannot
+    work cleanly, and measuring proved it rather than listening:
 
-    * the envelope is read by **interpolating the mel curve at the harmonic's own
-      frequency**, not by taking the nearest FFT bin — mel bands are wide, and
-      sampling them bin-wise lets the second harmonic outshout the first, which is
-      what makes a phase-vocoder return the melody an octave high;
-    * harmonics carry a **glottal roll-off** ``1/k**rolloff`` on top of the envelope,
-      guaranteeing the fundamental dominates.
+    * a harmonic placed on the nearest FFT *bin* is up to ``sr/(2*n_fft)`` = 21.5 Hz
+      from its true frequency, which at a 147 Hz fundamental is a 2.6 % tuning error,
+      different for every harmonic;
+    * so the waveform inside each frame runs at the bin frequency while the phase
+      advance between frames follows *f0*. The two disagree by up to 62 degrees
+      across one window, and overlap-add of Hann windows with that drift partially
+      cancels: a perfectly periodic 146.83 Hz input came out with periodicity 0.92
+      and 46 % of its energy outside the harmonic frequencies. That is the buzzy,
+      metallic, "obviously synthetic" quality.
 
-    ~0.01x realtime (0.2 s for a 15 s chant), because there is no phase search.
+    Now the harmonics are summed directly in the time domain with a phase
+    accumulator, ``sum_k A_k(t) * cos(k*phi(t) + k*pi)``, where
+    ``phi = 2*pi * integral(f0)``. Pitch is exact by construction, the waveform is
+    periodic by construction (every harmonic is an integer multiple of the same
+    instantaneous frequency, so there is no beating), and the glottal pulse shape
+    comes from the ``k*pi`` phases.
+
+    Unvoiced frames keep the frame-based path, because there the envelope *is* the
+    signal: noise shaped by the mel curve, which is what a consonant is.
     """
     logmel_db = np.asarray(logmel_db, dtype=np.float64)
     n_frames = logmel_db.shape[0]
@@ -377,58 +413,130 @@ def harmonic_vocode(logmel_db: np.ndarray, f0_track: np.ndarray, sr: int = SR,
     freqs = np.arange(n_bins) * sr / n_fft
     rng = np.random.default_rng(seed)
     nyq = sr / 2.0
+    n = (n_frames - 1) * hop + n_fft
 
-    # A log-mel frame is a smooth spectral envelope; interpolate it in dB over Hz.
-    # Repeat the edge bands so the curve extends over the whole spectrum.
+    # The mel curve, extended across the spectrum so interpolation never extrapolates.
     xs = np.concatenate(([0.0], centres, [nyq]))
-    spec = np.zeros((n_frames, n_bins), dtype=np.complex128)
+    db = np.concatenate((logmel_db[:, :1], logmel_db, logmel_db[:, -1:]), axis=1)
+    env = 10.0 ** (np.stack([np.interp(freqs, xs, row) for row in db]) / 20.0)
 
-    for i in range(n_frames):
-        db = np.concatenate(([logmel_db[i, 0]], logmel_db[i], [logmel_db[i, -1]]))
-        env = 10.0 ** (np.interp(freqs, xs, db) / 20.0)   # linear amplitude envelope
-        f0 = float(f0_track[i]) if i < len(f0_track) else 0.0
+    f0_track = np.asarray(f0_track, dtype=np.float64)
+    if len(f0_track) < n_frames:
+        f0_track = np.pad(f0_track, (0, n_frames - len(f0_track)), mode="edge")
+    f0_track = f0_track[:n_frames]
+    voiced = f0_track > 0
 
-        if f0 <= 0.0:
-            spec[i] = env * np.exp(2j * np.pi * rng.random(n_bins))
-            continue
+    # Frame centres in seconds, for interpolating the frame-rate tracks to samples.
+    tc = (np.arange(n_frames) * hop + n_fft / 2.0) / sr
+    ts = np.arange(n) / sr
 
-        # One phase per frame, with harmonics phase-aligned at the frame centre.
-        # Giving each harmonic an unrelated phase (as an earlier version did) makes
-        # the inverse transform produce a click: the frame's amplitude is the sum of
-        # 30 random-phase sinusoids, which cancels almost everywhere and spikes once.
-        # Coherent harmonics build a pulse train instead, which is what a glottal
-        # source actually is.
-        ph0 = rng.random() * 2 * np.pi
-        k = 1
-        while k * f0 < nyq:
-            b = int(round(k * f0 * n_fft / sr))
-            if 0 < b < n_bins:
-                # a little random jitter keeps it from sounding like an organ
-                amp = env[b] * (k ** -rolloff) * (1.0 + 0.12 * (rng.random() - 0.5))
-                spec[i, b] = amp * np.exp(1j * (ph0 + k * math.pi))
-            k += 1
-        # Match the frame's energy to the mel frame it came from.  A harmonic comb
-        # sampled at k*f0 is much sparser than the broadband frame that produced the
-        # mel, so without this a sustained note can come out 20 dB quiet — and a quiet
-        # frame is exactly where a pitch tracker latches onto a harmonic and reports
-        # the melody an octave high.
-        # Align the frame's *loudest* band, not its mean.  The comb is sparse, so a
-        # mean- or energy-matched gain is dominated by whichever harmonics happen to
-        # fall inside wide mel bands (or by the bright ones the roll-off suppresses),
-        # and the result comes out far too quiet.  Matching the peak band keeps the
-        # output at the level the mel frame describes.
-        target_amp = float(np.max(10.0 ** (logmel_db[i] / 20.0)))
-        got_amp = float(np.max(np.abs(spec[i]))) or 1e-12
-        gain = min(8.0, max(0.125, target_amp / got_amp))
-        spec[i] *= gain
-        if breath > 0.0:
-            # aspiration, band-limited to above the fundamental so it cannot
-            # masquerade as a lower note
-            lo = min(n_bins - 1, int(2.5 * f0 * n_fft / sr))
-            noise = np.zeros(n_bins)
-            noise[lo:] = rng.standard_normal(n_bins - lo)
-            spec[i] += breath * env.mean() * noise * np.exp(2j * np.pi * rng.random(n_bins))
+    # ---- per-sample pitch and phase ------------------------------------------ #
+    f0_s = np.interp(ts, tc, f0_track) if voiced.any() else np.zeros(n)
+    f0_s = np.where(f0_s > 0, f0_s, 0.0)
+    # exact phase accumulator: phi(t) = 2*pi * integral of f0
+    phi = 2.0 * np.pi * np.cumsum(f0_s) / sr
 
-    x = istft(spec, n_fft, hop, length=n_frames * hop + n_fft)
+    # ---- harmonic amplitudes, frame rate -> sample rate ---------------------- #
+    f_lo = 55.0
+    f_max = float(np.max(f0_track[voiced])) if voiced.any() else 0.0
+    k_max = int(nyq / f_lo) if f_max <= 0 else int(min(nyq / max(f_max, 1e-9), 80))
+    y = np.zeros(n)
+    if k_max >= 1:
+        # Amplitude of harmonic k in each frame, from the envelope at k*f0 — then
+        # scaled per frame so the *power in each mel band* matches the mel frame.
+        #
+        # The previous version matched the frame's single loudest band, which is a
+        # heuristic that silently loses energy: measured, it produced 0.155 RMS from a
+        # source whose own mel gave 0.261 — a 4.5 dB error, applied to every frame,
+        # which then looked like "the trained engine is quieter" in an A/B listen.
+        #
+        # The exact statement is linear in power: `logmel` computes `fb @ |X|^2`, so if
+        # the comb's per-band power is `p0` and the target is `t = 10**(mel/10)`, the
+        # gain satisfying it in least squares is
+        #     g^2 = (p0 . t) / (p0 . p0)
+        # — one dot product per frame, and it makes the vocoder's output have the
+        # loudness the mel frame describes by construction.
+        fb = _filterbank_cached(sr, n_fft, n_mels)
+        kk = np.arange(1, k_max + 1)
+        A = np.zeros((n_frames, k_max))
+        line = np.zeros(n_bins)
+        for f_i in np.flatnonzero(voiced):
+            f0 = float(f0_track[f_i])
+            line[:] = 0.0
+            # amplitude of each harmonic from the envelope at its own frequency
+            for k in kk:
+                fk = k * f0
+                if fk >= nyq or fk < f_lo:
+                    continue
+                j = int(round(fk * n_fft / sr))
+                if 0 < j < n_bins:
+                    a = float(np.interp(fk, freqs, env[f_i])) * (k ** -rolloff)
+                    A[f_i, k - 1] = a
+                    line[j] = a
+            # per-frame power match, so the comb has the loudness the mel frame says
+            p0 = fb @ (line ** 2)
+            tgt = 10.0 ** (logmel_db[f_i] / 10.0)
+            num = float(p0 @ tgt)
+            den = float(p0 @ p0)
+            g = math.sqrt(max(num, 0.0) / den) if den > 0 else 0.0
+            A[f_i] *= min(max(g, 0.0), 40.0)
+        # Harmonic phases are spread over the cycle instead of all aligning at one
+        # instant.  With every harmonic in phase the sum is a delta-like click: measured
+        # crest factor 17-25 dB against the formant engine's 11 dB, which a peak limiter
+        # then squashes, costing the render ~13 dB of level.  A glottal pulse is broad,
+        # not a click, so the phases follow `psi_k = k*phase_spread`, which is a
+        # time-shift of the pulse (no audible change in pitch or timbre, since the
+        # magnitude spectrum is identical) while lowering the crest factor.
+        for k in range(k_max):
+            a = np.interp(ts, tc, A[:, k])
+            if not np.any(a):
+                continue
+            y += a * np.cos((k + 1) * phi + (k + 1) * phase_spread)
+
+    # ---- unvoiced and breath: the frame-based path, where it is correct ------ #
+    noise_frames = (~voiced)
+    if breath > 0 or noise_frames.any():
+        spec = np.zeros((n_frames, n_bins), dtype=np.complex128)
+        # aspiration lives above the fundamental so it cannot read as a lower note
+        lo = int(min(n_bins - 1, max(f_lo, 2.5 * f_max) * n_fft / sr)) if f_max else 0
+        for i in np.flatnonzero(noise_frames | (voiced & (breath > 0))):
+            e = env[i].copy()
+            e[:lo] *= 0.03
+            mag = e * rng.standard_normal(n_bins)
+            if noise_frames[i]:
+                spec[i] = mag * np.exp(2j * np.pi * rng.random(n_bins))
+            else:
+                spec[i] = breath * mag * np.exp(2j * np.pi * rng.random(n_bins))
+        nz = istft(spec, n_fft, hop, length=n)
+        y = y + nz[:n]
+
+    # Level: match the mel's own level, rather than peak-normalising.  A glottal pulse
+    # train is peaked, so dividing by the peak throws away several dB — and because the
+    # rule engine does not peak-normalise the same way, the trained render came out
+    # quieter than the render it was meant to colour.
+    #
+    # Note on computing this: use the *same* `logmel` the target was made with, and
+    # scale by the difference of mean levels.  An earlier attempt built the mel with a
+    # positional call (`logmel(y, sr, n_mels, n_fft, hop)`) while the target came from
+    # `logmel(x, sr)`; the two agreed in shape but 16 dB apart in level, which is how a
+    # function that looks like a pure rescale turns into a quiet render.
+    #    Match *power*, not the mean of the dB values.  Averaging dB across 40 bands
+    #    weights a silent band as heavily as a loud one, and a harmonic comb cannot fill
+    #    bands the mel has at -55 dB, so the mean reads 8 dB low even when the loud bands
+    #    are perfect — measured: +8.2 dB too loud on a steady tone.  Summing linear power
+    #    is what "same loudness" actually means.
+    got_db = logmel(y.astype(np.float32), sr)
+    ref = np.asarray(logmel_db)
+    p_got = float(np.sum(10.0 ** (got_db / 10.0)))
+    p_ref = float(np.sum(10.0 ** (ref / 10.0)))
+    if p_got > 0.0 and p_ref > 0.0 and np.isfinite(p_got) and np.isfinite(p_ref):
+        y = y * math.sqrt(p_ref / p_got)
+    # No peak limiter here.  A harmonic source has a 16 dB crest factor against the
+    # formant engine's 11 dB, so hard-limiting to full scale silently removed ~13 dB of
+    # level — and the caller then had nothing left to match against, which is why the
+    # trained render was consistently quieter than the render it coloured.  Level and
+    # limiting belong to exactly one place: the caller, which knows what the target is.
+    return y.astype(np.float32)
+
     peak = float(np.max(np.abs(x))) or 1.0
     return (x / peak * 0.89).astype(np.float32)

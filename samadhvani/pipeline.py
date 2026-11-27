@@ -317,8 +317,12 @@ def chant(text: str, options: ChantOptions | None = None, **overrides) -> Chant:
 
         base, sr = synthesize_formant(plan, phone_lists, seed=opts.seed,
                                       breath=opts.breath, room=0.0)
+        # `intensity` is the stylisation control on the formant path, and the natural
+        # meaning on this path too: how far to move toward the learned voice.  It was
+        # never passed through, so the slider did nothing at all on the trained engine.
         audio, sr = render_voice(plan, phone_lists, opts.checkpoint,
-                                 base_audio=base, seed=opts.seed, room=opts.room)
+                                 base_audio=base, seed=opts.seed, room=opts.room,
+                                 strength=float(opts.intensity))
         caveats.append(
             "Voice engine: melody from the svara notation, timbre from the trained "
             "corpus, phase from harmonic resynthesis. Not a neural vocoder — expect "
