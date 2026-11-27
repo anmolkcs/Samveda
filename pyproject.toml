@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "samadhvani"
+version = "0.1.0"
+description = "Samadhvani — a svara-aware Sāmaveda sāmagāna text-to-speech, trainable on a free Kaggle GPU"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Samveda contributors" }]
+keywords = ["samaveda", "sanskrit", "tts", "chant", "vedic", "speech-synthesis", "smagana"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Natural Language :: Sanskrit",
+    "Programming Language :: Python :: 3",
+]
+
+# Core install is deliberately light: the formant engine needs only NumPy and SciPy,
+# so a user can generate chant with a plain `pip install samadhvani`.  Torch is an
+# optional extra because it is a 200 MB download that only training needs.
+dependencies = [
+    "numpy>=1.21",
+    "scipy>=1.7",
+]
+
+[project.optional-dependencies]
+# The demo server.
+app = ["fastapi>=0.100", "uvicorn[standard]>=0.23", "pydantic>=2"]
+# Training and the neural engine.
+train = ["torch>=2.0"]
+dev = [
+    "pytest>=7",
+    "fastapi>=0.100",
+    "uvicorn[standard]>=0.23",
+    "pydantic>=2",
+    "httpx",
+]
+
+[project.scripts]
+samadhvani = "samadhvani.cli:main"
+samadhvani-serve = "samadhvani.app.serve:main"
+
+[project.urls]
+Homepage = "https://github.com/anmolkcs/Samveda"
+Source = "https://github.com/anmolkcs/Samveda"
+
+[tool.setuptools.packages.find]
+include = ["samadhvani*"]
+
+[tool.setuptools.package-data]
+"samadhvani.app" = ["static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]

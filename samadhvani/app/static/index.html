@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Samadhvani — Sāmaveda chant synthesis</title>
+<link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+<header>
+  <div class="brand">
+    <span class="mark">ॐ</span>
+    <div>
+      <h1>समध्वनि <small>Samadhvani</small></h1>
+      <p class="tag">Sāmaveda sāmagāna synthesis — svara-aware, śākhā-aware, and honest about what it can know.</p>
+    </div>
+  </div>
+  <nav>
+    <button data-tab="sing" class="active">Sing</button>
+    <button data-tab="about">How it works</button>
+    <button data-tab="data">Data &amp; licences</button>
+  </nav>
+</header>
+
+<main>
+<!-- ───────────────────────────── SING ───────────────────────────── -->
+<section id="tab-sing" class="tab active">
+  <div class="layout">
+    <div class="panel composer">
+      <label for="text">Verse <span class="hint">— any Indic script, IAST, or Devanāgarī with Vedic accents</span></label>
+      <textarea id="text" rows="5" spellcheck="false"
+        placeholder="हाउ अ॒ग्निमी॑ळे पु॒रोहि॑तं य॒ज्ञस्य॑ दे॒वमृ॒त्विज॑म्"></textarea>
+      <div class="row">
+        <select id="samples"><option value="">Load a sample verse…</option></select>
+        <button id="sing" class="primary">Sing <kbd>⏎</kbd></button>
+      </div>
+
+      <details open>
+        <summary>Settings</summary>
+        <div class="grid">
+          <label>Mode
+            <select id="mode">
+              <option value="auto" selected>auto — detect from the text</option>
+              <option value="style">style — ṛc dressed as gāna</option>
+              <option value="samhita">saṃhitā — honour the accents</option>
+              <option value="gana">gāna — read the svara numerals</option>
+            </select>
+          </label>
+          <label>Śākhā (recitation school)
+            <select id="school"></select>
+          </label>
+          <label>Gāna model
+            <select id="model"></select>
+          </label>
+          <label>Laya <output id="layaOut">0.42 s</output>
+            <input type="range" id="laya" min="0.24" max="0.66" step="0.02" value="0.42" />
+          </label>
+          <label>Tonic (Sa) <output id="tonicOut">147 Hz</output>
+            <input type="range" id="tonic" min="100" max="230" step="1" value="147" />
+          </label>
+          <label>Transpose <output id="trOut">0 st</output>
+            <input type="range" id="transpose" min="-12" max="12" step="1" value="0" />
+          </label>
+          <label>Stylisation <output id="intOut">0.8</output>
+            <input type="range" id="intensity" min="0" max="1" step="0.05" value="0.8" />
+          </label>
+          <label>Room <output id="roomOut">0.18</output>
+            <input type="range" id="room" min="0" max="0.55" step="0.01" value="0.18" />
+          </label>
+          <label>Engine
+            <select id="engine"><option value="formant">formant (built in)</option></select>
+          </label>
+          <label class="check"><input type="checkbox" id="evaluate" checked /> Score the audio</label>
+        </div>
+      </details>
+
+      <div id="status" class="status">Ready.</div>
+    </div>
+
+    <div class="panel output">
+      <div id="playerWrap" class="player hidden">
+        <div class="nowsinging">
+          <span class="kicker">now singing</span>
+          <div id="modeBadge" class="badge"></div>
+        </div>
+        <audio id="player" controls></audio>
+        <div class="meta" id="meta"></div>
+      </div>
+      <div id="placeholder" class="placeholder">
+        <p>The svara track, the phones and the metrics will appear here.</p>
+        <p class="small">Every render shows its own work: which mode it used, which
+        vikāras it applied, and — if you ask — how well the audio matches the score.</p>
+      </div>
+    </div>
+  </div>
+
+  <div id="svaraStrip" class="panel strip hidden"></div>
+  <div id="breakdown" class="grid2 hidden">
+    <div class="panel"><h3>Syllables &amp; svaras</h3><div id="syllables" class="scroll"></div></div>
+    <div class="panel"><h3>Vikāras &amp; metrics</h3><div id="analysis"></div></div>
+  </div>
+  <div id="caveats" class="caveats hidden"></div>
+</section>
+
+<!-- ───────────────────────────── ABOUT ───────────────────────────── -->
+<section id="tab-about" class="tab">
+  <div class="panel prose">
+    <h2>How a verse becomes a chant</h2>
+    <p class="lede">A sāman is not a melody you can improvise. The gāna books fix, for each
+    sāman, which of the seven sāma svaras each syllable takes and how long it is held. So
+    a faithful system has to do three things: get the <em>words</em> right, get the
+    <em>notes</em> right, and be clear about which of those it actually knows.</p>
+
+    <h3>1 · Text frontend</h3>
+    <p>Any supported script is converted to Devanāgarī internally, then segmented into
+    <em>akṣaras</em>. Two Sanskrit-specific traps are avoided on purpose: Hindi-style
+    <b>schwa deletion</b> (silently turning <i>rāma</i> into <i>rām</i>) never runs, and
+    Vedic accents are treated as combining marks that belong to a syllable rather than
+    punctuation, so <span class="deva">अ॒ग्निमी॑ळे</span> stays one word.</p>
+
+    <h3>2 · Sāma-vikāra engine</h3>
+    <p>Turning a ṛc into a sāman means editing the words in six documented ways: vikāra
+    (substitution), viśleṣa (breaking sandhi), vikarṣaṇa (prolongation), abhyāsa
+    (repetition), virāma (pause) and stobha (inserting syllables like <i>hāu</i>,
+    <i>ho</i>, <i>hā'u</i>). The engine applies these, and the stobha inventory changes
+    with the śākhā — which is why the school selector changes what you hear.</p>
+
+    <h3>3 · Svara plan</h3>
+    <p>The seven sāma svaras — kṛṣṭa, prathama, dvitīya, tṛtīya, caturtha, mandra,
+    atisvārya — descend from the highest, and Nāradīya Śikṣā relates them to the flute as
+    Ma, Ga, Ri, Sa, Ni, Dha, Pa. They are mapped to semitones so the acoustic model has
+    one note space whether the source is a gāna text, an accented saṃhitā, or a plain
+    verse.</p>
+
+    <h3>4 · Acoustic model</h3>
+    <p>F0 is <b>not</b> predicted by a network. The svara sequence is given by the
+    tradition and the melody is computed exactly; a network would only add drift. What a
+    network does learn is the <em>phonetics</em>: per-phone durations and the formant
+    tracks (F1/F2/F3) of sustained vowels and consonants. That split is why the model is
+    small enough to train on a free Kaggle T4 — the music-side entropy is low and almost
+    all the difficulty is in the sounds.</p>
+    <p>Two engines render it. The <b>formant</b> engine is a Klatt-style source-filter
+    cascade with a jittered Rosenberg glottal source, per-phone spectral shaping, formant
+    transitions across consonant boundaries, a nasal antiformant and a small hall. The
+    <b>neural</b> engine keeps the same cascade and takes its formant tracks and durations
+    from a trained checkpoint. Compare them on the same verse — that is what the engine
+    switch is for.</p>
+
+    <h3>What the modes mean</h3>
+    <table class="modes">
+      <tr><th>gāna</th><td>The text is a real gāna text with svara numerals. Nothing is invented.</td></tr>
+      <tr><th>saṃhitā</th><td>The text has Vedic accents. The three-tone accent map is honoured: faithful recitation, not gāna.</td></tr>
+      <tr><th>style</th><td>No notation. The documented vikāras are applied and the result is laid on a gāna skeleton: the right phonetics and musical grammar, but <em>not</em> the sāman this ṛc's own śākhā would sing.</td></tr>
+    </table>
+    <p class="small">That last distinction is the whole point. A tool that claimed to know
+    the right tune for arbitrary Sanskrit would be lying; one that says which mode it is
+    in lets you rely on it where it is reliable.</p>
+  </div>
+</section>
+
+<!-- ───────────────────────────── DATA ───────────────────────────── -->
+<section id="tab-data" class="tab">
+  <div class="panel prose">
+    <h2>Training data — what exists, and what may be used</h2>
+    <p class="lede">Text is the easy half: the gāna books are open and enormous. Audio with
+    a transcript is the bottleneck, and much of what exists is not licensed for training.
+    This table says which is which, so a released model never quietly rests on someone
+    else's recording.</p>
+    <div id="dataTable" class="scroll"></div>
+    <div id="dataSummary" class="summary"></div>
+    <h3>Getting to five useful hours</h3>
+    <p>Five hours of purpose-recorded, consented, single-singer Sāma recitation will beat
+    every public source on that list for training a first model — that is the practical
+    lesson from comparable systems. The recording protocol, the akṣara-level alignment
+    scheme and the quality tiering are in <code>docs/DATA.md</code>; the notebook
+    <code>notebooks/kaggle_samadhvani.ipynb</code> runs the whole pipeline on a free T4.</p>
+  </div>
+</section>
+</main>
+
+<footer>
+  <span>Samadhvani · a Sāma chant TTS · <a href="/api/health">api</a> · <a href="/docs">docs</a></span>
+  <span class="small">Formant engine runs anywhere. Neural engine needs a checkpoint you trained.</span>
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

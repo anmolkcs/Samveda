@@ -1,0 +1,66 @@
+                                  ┌──────────────────────────────┐
+   Devanāgarī / IAST /            │  text/unicodedata_ext.py     │
+   Kannada / Telugu /  ─────────► │  • script detection          │
+   Bengali / Gujarati …           │  • transliteration (no schwa │
+                                  │    deletion — ever)          │
+                                  └──────────────┬───────────────┘
+                                                 ▼
+                                  ┌──────────────────────────────┐
+                                  │  text/syllabify.py           │
+                                  │  • akṣara segmentation       │
+                                  │  • Vedic accents → svara     │
+                                  │  • pluta numerals → length   │
+                                  │  • folded virama coda        │
+                                  └──────────────┬───────────────┘
+                        ┌────────────────────────┼────────────────────────┐
+                        ▼                        ▼                        ▼
+          ┌──────────────────────┐  ┌──────────────────────┐  ┌──────────────────────┐
+          │ text/vikara.py       │  │ text/svaras.py       │  │ phones/g2p.py        │
+          │ sāma-vikāras:        │  │ 7 sāma svaras        │  │ • aspiration         │
+          │ vikāra  viśleṣa      │  │ → semitones          │  │ • retroflexion       │
+          │ vikarṣaṇa  abhyāsa   │  │ (Nāradīya Śikṣā      │  │ • 3 sibilants        │
+          │ virāma  stobha       │  │  venu: Ma Ga Ri Sa   │  │ • vocalic ṛ ḷ        │
+          │ āgama                │  │  Ni Dha Pa)          │  │ • ḷ (ळ)              │
+          │                      │  │                      │  │ • jihvāmūlīya        │
+          │ + 3 schools:         │  │ + accents (saṃhitā)  │  │ • upadhmānīya        │
+          │ Kauthuma Rāṇāyanīya  │  │ + numerals (gāna)    │  │ • homorganic anusvāra│
+          │ Jaiminīya            │  │                      │  │                      │
+          └──────────┬───────────┘  └──────────┬───────────┘  └──────────┬───────────┘
+                     └─────────────────────────┼─────────────────────────┘
+                                               ▼
+                                  ┌──────────────────────────────┐
+                                  │  synth/timing.py             │
+                                  │  mātrā → seconds, cadence    │
+                                  │  holds, breath groups        │
+                                  └──────────────┬───────────────┘
+                        ┌────────────────────────┴────────────────────────┐
+                        ▼                                                 ▼
+          ┌──────────────────────────────┐               ┌──────────────────────────────┐
+          │ synth/prosody.py             │               │  learned (neural engine)     │
+          │ • EXACT F0 from svaras       │               │  DurationPredictor  (~0.4 M) │
+          │ • legato glides              │               │  SpectrogramModel   (~2.5 M) │
+          │ • kampita ornament           │               │  → formant tracks F1/F2/F3   │
+          │ • breath positions           │               │    + voice/noise levels      │
+          └──────────────┬───────────────┘               └──────────────┬───────────────┘
+                         └──────────────────┬────────────────────────────┘
+                                            ▼
+                            ┌───────────────────────────────┐
+                            │  synth/formant.py             │
+                            │  Klatt-style cascade:         │
+                            │  Rosenberg glottal + jitter   │
+                            │  → lip radiation (differentiator)
+                            │  → 3 formant resonators       │
+                            │  + per-phone noise bands      │
+                            │  + nasal antiformant          │
+                            └───────────────┬───────────────┘
+                                            ▼
+                            ┌───────────────────────────────┐
+                            │  synth/engine.py              │
+                            │  + breaths, room, temple EQ   │
+                            └───────────────┬───────────────┘
+                                            ▼
+                                       WAV + full
+                                    metadata + caveats
+
+The melody is never predicted. F0 is computed from the svara sequence, so the chant is
+always in tune with its own score; only the phonetics are learned.
