@@ -42,9 +42,13 @@ async function boot() {
   const eng = $('engine');
   eng.innerHTML = '';
   const engines = (health.engines && health.engines.length) ? health.engines : ['formant'];
+  const prov = health.voice_provenance || null;
+  const voiceLabel = prov && prov.is_archival
+    ? 'voice (trained on sāmagāna)'
+    : 'voice (trained checkpoint)';
   const LABELS = {
     formant: 'formant (built in)',
-    voice: 'voice (trained on sāmagāna)',
+    voice: voiceLabel,
     neural: 'neural (trained checkpoint)',
   };
   for (const e of engines) {
@@ -61,6 +65,20 @@ async function boot() {
     eng.appendChild(o);
   }
   if (engines.includes('voice')) eng.value = 'voice';
+
+  // Say whose voice this is. A trained model and a demo that plays it must not
+  // differ on the one fact a listener needs: was this trained on the tradition?
+  const box = $('voiceProv');
+  if (box && prov) {
+    const m = prov.metrics || {};
+    const imp = (m.improvement_pct !== undefined)
+      ? ` · <span class="dim">${m.improvement_pct > 0 ? '+' : ''}${m.improvement_pct}% vs the corpus mean, ${m.segments || '?'} segments</span>`
+      : '';
+    box.innerHTML = prov.is_archival
+      ? `<b>Voice model:</b> ${prov.summary}${imp}`
+      : `<b>Voice model:</b> ${prov.summary}. <b>The timbre you hear is not a Sāma reciter</b> — it is a placeholder trained here because this environment cannot reach archive.org. Your Kaggle run produced the real one.`;
+    box.className = 'prov' + (prov.is_archival ? '' : ' warn');
+  }
 
   try {
     const meta = await (await fetch('/api/samples')).json();

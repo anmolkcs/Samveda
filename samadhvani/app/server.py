@@ -76,6 +76,41 @@ def _checkpoint_kind(path: str | None) -> str | None:
     return "neural"
 
 
+def _voice_provenance(path: str | None) -> dict | None:
+    """What the loaded voice model was trained on, in words a listener can read.
+
+    A demo that plays a trained voice owes the listener one fact: whose voice is
+    this, and was it trained on the tradition or on something synthetic?  Two
+    checkpoints can report identical metrics and mean completely different things.
+    """
+    if not path:
+        return None
+    try:
+        import torch
+
+        blob = torch.load(path, map_location="cpu", weights_only=False)
+    except Exception:
+        return None
+    prov = (blob or {}).get("provenance") or {}
+    sources = [os.path.basename(str(x)) for x in prov.get("sources", [])]
+    archive = [x for x in sources if x.upper().startswith("SV")]
+    if archive:
+        summary = (f"trained on {prov.get('hours', 0):.2f} h of IISH sāmagāna "
+                   f"({len(archive)} archive.org clips)")
+    elif sources:
+        summary = (f"trained on {prov.get('hours', 0):.2f} h of {len(sources)} local "
+                   "audio files — not archival sāmagāna")
+    else:
+        summary = "no provenance recorded (checkpoint predates provenance tracking)"
+    return {
+        "summary": summary,
+        "hours": prov.get("hours"),
+        "n_clips": len(archive) or len(sources),
+        "is_archival": bool(archive),
+        "metrics": (blob or {}).get("metrics", {}),
+    }
+
+
 def _find_checkpoint(kind: str | None = None) -> str | None:
     """First checkpoint on disk, optionally restricted to one engine."""
     for c in CHECKPOINT_CANDIDATES:
@@ -157,6 +192,7 @@ def health():
         "checkpoint": ck,
         "neural_ready": bool(neural and neural_ck),
         "voice_ready": bool(voice_ck),
+        "voice_provenance": _voice_provenance(voice_ck),
         "engines": engines,
         "modes": ["auto", "style", "samhita", "gana"],
         "models": model_keys(),

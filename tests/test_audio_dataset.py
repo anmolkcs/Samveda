@@ -551,3 +551,75 @@ def test_corpus_reports_how_much_of_the_input_it_used(tmp_path, capsys):
     assert "of audio" in out and "% of the files given" in out
     # one short file against a 4 h cap -> say so, instead of implying success
     assert "cap not reached" in out
+
+
+def test_checkpoint_records_what_it_was_trained_on(tmp_path):
+    """Metrics say whether the model fitted. They do not say whether it heard a
+    Sāmaveda recording or synthetic chant, and those must not be confused in a
+    demo that plays the result to someone."""
+    import torch
+
+    from samadhvani.synth.io import write_wav
+    from samadhvani.data.dataset import build_corpus
+    from samadhvani.train.voice_trainer import (VoiceConfig, add_f0_to_corpus,
+                                                train_voice)
+
+    chunks = []
+    for laya in (0.26, 0.34, 0.42, 0.50):
+        c = chant("हाउ ४ अ॒ग्निमी॑ळे ३ पु॒रोहि॑तं २ य॒ज्ञस्य॑ १ दे॒वमृ॒त्विक्",
+                  ChantOptions(mode="gana", laya=laya))
+        chunks.append(np.asarray(c.audio, dtype=np.float32))
+    wav = tmp_path / "SV001.wav"
+    write_wav(str(wav), np.concatenate(chunks), SR)
+    corpus = tmp_path / "c.npz"
+    build_corpus([str(wav)], str(corpus), max_hours=1.0, verbose=False)
+    add_f0_to_corpus(str(corpus), verbose=False)
+    out = tmp_path / "v.pt"
+    train_voice(str(corpus), str(out),
+                VoiceConfig(epochs=2, batch_size=4, hidden=16, n_layers=2,
+                            device="cpu"), verbose=False)
+
+    blob = torch.load(out, map_location="cpu", weights_only=False)
+    prov = blob["provenance"]
+    assert prov["n_sources"] == 1
+    assert prov["sources"][0].endswith("SV001.wav")
+    assert prov["hours"] > 0
+    assert 0.0 <= prov["voiced_fraction"] <= 1.0
+
+
+def test_server_labels_a_synthetic_checkpoint_as_not_archival(tmp_path, monkeypatch):
+    """The demo must not caption a placeholder model "trained on sāmagāna"."""
+    import torch
+
+    from samadhvani.app import server
+    from samadhvani.train.voice_trainer import VoiceColorModel
+
+    model = VoiceColorModel(hidden=16, n_layers=2)
+    path = tmp_path / "voice.pt"
+    torch.save({
+        "version": 2, "kind": "voice-color",
+        "voice_state": {k: v.detach().numpy() for k, v in model.state_dict().items()},
+        "mean_spectrum": np.full((N_MELS,), -30.0),
+        "config": {"hidden": 16, "n_layers": 2, "n_mels": N_MELS, "sr": SR, "hop": HOP},
+        "metrics": {"improvement_pct": 12.0, "segments": 48},
+        "provenance": {"sources": ["c0.wav", "c1.wav"], "n_sources": 2,
+                       "hours": 0.05, "voiced_fraction": 0.9},
+    }, path)
+
+    got = server._voice_provenance(str(path))
+    assert got["is_archival"] is False
+    assert "not archival" in got["summary"]
+
+    # ...and an IISH-named corpus is recognised as archival
+    torch.save({
+        "version": 2, "kind": "voice-color",
+        "voice_state": {k: v.detach().numpy() for k, v in model.state_dict().items()},
+        "mean_spectrum": np.full((N_MELS,), -30.0),
+        "config": {"hidden": 16, "n_layers": 2, "n_mels": N_MELS, "sr": SR, "hop": HOP},
+        "metrics": {},
+        "provenance": {"sources": [f"SV{i:03d}.mp3" for i in range(1, 25)],
+                       "n_sources": 24, "hours": 4.0, "voiced_fraction": 0.48},
+    }, path)
+    got = server._voice_provenance(str(path))
+    assert got["is_archival"] is True
+    assert "IISH" in got["summary"] and "4.00 h" in got["summary"]

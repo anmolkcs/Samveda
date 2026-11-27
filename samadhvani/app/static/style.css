@@ -203,3 +203,19 @@ footer {
   color: var(--muted); font-size: 12px;
 }
 footer a { color: var(--indigo); }
+
+/* What the loaded voice model was trained on. Deliberately plain and slightly
+   muted: it is a provenance note, not a feature badge. */
+.prov {
+  grid-column: 1 / -1;
+  margin-top: .35rem;
+  padding: .45rem .6rem;
+  border-left: 2px solid #8a7a4a;
+  background: rgba(138, 122, 74, .08);
+  font-size: .82rem;
+  line-height: 1.45;
+  border-radius: 0 4px 4px 0;
+}
+.prov.warn { border-left-color: #a4552f; background: rgba(164, 85, 47, .10); }
+.prov b { font-weight: 600; }
+.prov .dim { opacity: .75; }

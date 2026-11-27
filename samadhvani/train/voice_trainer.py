@@ -250,6 +250,12 @@ def train_voice(npz: str, out: str, cfg: VoiceConfig | None = None,
                          "(and more is much better; see docs/DATA-ADDENDUM.md §6)")
 
     mean_spec = corpus_mean_spectrum(npz)
+    # Where did this voice come from? A checkpoint's metrics say whether the model
+    # fitted; they do not say whether it heard a Sāmaveda recording or synthetic
+    # chant, and "trained on 4 h of sāmagāna" must not be a claim the weights cannot
+    # support. Recorded here so the app and the CLI can print it.
+    sources = sorted({str(md.get("audio", "")) for md in
+                      (json.loads(x) for x in blob["meta"]) if md.get("audio")})
     rng = np.random.default_rng(cfg.seed)
     order = rng.permutation(n)
     # Never let validation be a single segment: on a tiny corpus one held-out clip
@@ -351,6 +357,12 @@ def train_voice(npz: str, out: str, cfg: VoiceConfig | None = None,
             "segments": int(n),
             "train_seconds": round(time.time() - t0, 1),
             "best_epoch": best_ep,
+        },
+        "provenance": {
+            "sources": sources[:200],
+            "n_sources": len(sources),
+            "hours": round(float((blob["mask"].sum(axis=1) * HOP).sum()) / SR / 3600, 3),
+            "voiced_fraction": round(float((blob["f0"] > 0).mean()), 3),
         },
     }
     if not HAS_TORCH:
