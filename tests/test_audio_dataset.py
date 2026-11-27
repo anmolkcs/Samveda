@@ -317,3 +317,70 @@ def test_voice_engine_without_checkpoint_falls_back(tmp_path):
     c = chant("ॐ नमो वैश्वानराय", ChantOptions(mode="style", engine="voice"))
     assert len(c.audio) > 0
     assert any("checkpoint" in k.lower() for k in c.caveats)
+
+
+# --------------------------------------------------------------------------- #
+# Checkpoint handling — two bugs that were invisible until the server was run.
+# --------------------------------------------------------------------------- #
+
+def test_training_creates_the_checkpoint_directory(tmp_path):
+    """A notebook writes to "work/voice.pt" without mkdir; that must just work.
+
+    torch.save raises RuntimeError if the parent directory is missing, and the
+    failure surfaces after the whole training run.
+    """
+    from samadhvani.synth.io import write_wav
+    from samadhvani.data.dataset import build_corpus
+    from samadhvani.train.voice_trainer import (VoiceConfig, add_f0_to_corpus,
+                                                train_voice)
+
+    chunks = []
+    # ~5 breath groups is enough to *pack* but not to train (needs 6), so build
+    # four renderings at different tempi.
+    for laya in (0.26, 0.34, 0.42, 0.50):
+        c = chant("हाउ ४ अ॒ग्निमी॑ळे ३ पु॒रोहि॑तं २ य॒ज्ञस्य॑ १ दे॒वमृ॒त्विक्",
+                  ChantOptions(mode="gana", laya=laya))
+        chunks.append(np.asarray(c.audio, dtype=np.float32))
+    wav = tmp_path / "a.wav"
+    write_wav(str(wav), np.concatenate(chunks), SR)
+    corpus = tmp_path / "c.npz"
+    build_corpus([str(wav)], str(corpus), str(tmp_path / "c.jsonl"),
+                 max_hours=1.0, verbose=False)
+    add_f0_to_corpus(str(corpus))
+    nested = tmp_path / "does" / "not" / "exist" / "voice.pt"
+    train_voice(str(corpus), str(nested),
+                VoiceConfig(epochs=2, batch_size=4, hidden=16, n_layers=2,
+                            device="cpu"), verbose=False)
+    assert nested.exists()
+
+
+def test_server_classifies_a_voice_checkpoint_under_modern_torch(tmp_path, monkeypatch):
+    """torch >= 2.6 defaults weights_only=True, which raises on numpy payloads.
+
+    The classifier swallowed that exception and returned None, so the trained
+    engine vanished from /api/health with no error anywhere — the failure mode is
+    a demo that silently only offers the rule engine.
+    """
+    import torch
+
+    from samadhvani.app import server
+    from samadhvani.train.voice_trainer import VoiceColorModel
+
+    model = VoiceColorModel(hidden=16, n_layers=2)
+    path = tmp_path / "voice.pt"
+    torch.save({
+        "version": 2, "kind": "voice-color",
+        "voice_state": {k: v.detach().numpy() for k, v in model.state_dict().items()},
+        "mean_spectrum": __import__("numpy").full((N_MELS,), -30.0),
+        "config": {"hidden": 16, "n_layers": 2, "n_mels": N_MELS, "sr": SR, "hop": HOP},
+        "metrics": {},
+    }, path)
+
+    assert server._checkpoint_kind(str(path)) == "voice"
+
+    monkeypatch.setenv("SAMADHVANI_CKPT", str(path))
+    monkeypatch.setattr(server, "CHECKPOINT_CANDIDATES", [str(path)])
+    assert server._find_checkpoint("voice") == str(path)
+    assert server._find_checkpoint("neural") is None
+    engines = server.health()["engines"]
+    assert "voice" in engines and "neural" not in engines

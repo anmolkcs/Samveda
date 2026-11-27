@@ -252,3 +252,35 @@ def test_wav_bytes_is_a_riff_file():
     data = wav_bytes(np.zeros(100, dtype=np.float32), SR)
     assert data[:4] == b"RIFF"
     assert data[8:12] == b"WAVE"
+
+
+def test_seeded_synth_is_reproducible_across_processes():
+    """`FormantSynth(seed=5)` must mean the same audio in every process.
+
+    The burst excitation was seeded from `hash(sym)`, and Python randomises str
+    hashing per process, so the same seed gave different output on different runs.
+    This test runs a child interpreter with a different PYTHONHASHSEED and compares
+    waveforms; it fails on the old code and passes on crc32.
+    """
+    import subprocess
+    import sys
+    import os
+    import hashlib
+
+    prog = (
+        "import numpy as np, hashlib;"
+        "from samadhvani.synth.formant import FormantSynth;"
+        "from samadhvani.audio.mel import SR;"
+        "n=int(0.12*SR); f0=np.full(n,146.83);"
+        "s=FormantSynth(seed=5);"
+        "a=np.concatenate([s.render_phone(p,n,f0) for p in ('k','kh','t','tt','p')]);"
+        "print(hashlib.sha1(np.asarray(a,dtype=np.float32).tobytes()).hexdigest())"
+    )
+    roots = os.pathsep.join(p for p in sys.path if p)
+    digests = set()
+    for hs in ("0", "12345"):
+        env = {**os.environ, "PYTHONHASHSEED": hs, "PYTHONPATH": roots}
+        out = subprocess.run([sys.executable, "-c", prog], capture_output=True,
+                             text=True, env=env, check=True)
+        digests.add(out.stdout.strip())
+    assert len(digests) == 1, f"seed is not reproducible: {digests}"

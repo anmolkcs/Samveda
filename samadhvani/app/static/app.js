@@ -42,18 +42,25 @@ async function boot() {
   const eng = $('engine');
   eng.innerHTML = '';
   const engines = (health.engines && health.engines.length) ? health.engines : ['formant'];
+  const LABELS = {
+    formant: 'formant (built in)',
+    voice: 'voice (trained on sāmagāna)',
+    neural: 'neural (trained checkpoint)',
+  };
   for (const e of engines) {
     const o = document.createElement('option');
     o.value = e;
-    o.textContent = e === 'neural' ? 'neural (trained checkpoint)' : 'formant (built in)';
+    o.textContent = LABELS[e] || e;
     eng.appendChild(o);
   }
-  if (!engines.includes('neural')) {
+  for (const e of ['voice', 'neural']) {
+    if (engines.includes(e)) continue;
     const o = document.createElement('option');
-    o.value = 'neural'; o.disabled = true;
-    o.textContent = 'neural — train a checkpoint first';
+    o.value = e; o.disabled = true;
+    o.textContent = `${e} — train a checkpoint first`;
     eng.appendChild(o);
   }
+  if (engines.includes('voice')) eng.value = 'voice';
 
   try {
     const meta = await (await fetch('/api/samples')).json();

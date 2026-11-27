@@ -24,6 +24,8 @@ Two heads, one encoder:
 
 from __future__ import annotations
 
+import zlib
+
 import numpy as np
 
 try:
@@ -53,7 +55,8 @@ def phone_features(sym: str, matra: float = 1.0, position: float = 0.0,
     dimension fixed as the inventory grows.
     """
     v = np.zeros(n_symbols, dtype=np.float32)
-    h = (hash(sym) & 0x7FFFFFFF) % n_symbols
+    # crc32, not hash(): str hashing is randomised per process
+    h = zlib.crc32(sym.encode()) % n_symbols
     v[h] = 1.0
     v[0] = min(matra, 4.0) / 4.0
     v[1] = position

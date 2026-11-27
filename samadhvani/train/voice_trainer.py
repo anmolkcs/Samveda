@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import math
 import time
+from pathlib import Path
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -354,6 +355,9 @@ def train_voice(npz: str, out: str, cfg: VoiceConfig | None = None,
     }
     if not HAS_TORCH:
         raise RuntimeError("torch required")
+    # A one-line notebook should not have to mkdir; the parent may be "work/",
+    # "checkpoints/", or an absolute path that does not exist yet.
+    Path(out).parent.mkdir(parents=True, exist_ok=True)
     torch.save(ckpt, out)
     if verbose:
         print(f"  saved {out}  ({ckpt['metrics']['val_residual_l1']:.4f} L1, "
