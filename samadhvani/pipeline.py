@@ -157,17 +157,25 @@ class Chant:
 # Mode detection
 # --------------------------------------------------------------------------- #
 
-#: Sāma svara numerals written inline with a syllable, as in the gāna books.
 def _looks_like_gana(text: str) -> bool:
+    """Is this an actual gāna text — i.e. does it carry sāma *notation*?
+
+    The only reliable signal is the notation itself: the svara numerals printed
+    against the syllables.  A text can carry stobhas ("hāu", "hovā") and still be a
+    saṃhitā or a plain verse with a stobha pasted in front, so stobha presence is
+    **not** sufficient.  Getting this wrong matters: claiming gāna mode for a text
+    with no numerals would mean claiming the notes were read from the text when
+    they were invented, which is exactly the dishonesty the modes exist to prevent.
+    """
     import re
 
+    # A Devanāgarī svara numeral next to a syllable, or a run of pluta marks.
+    if re.search(r"[क-ह][ािीुूृेैोौंँः॒॑]?\s*[१-७]", text):
+        return True
     if re.search(r"[१-७]\s*[क-ह]", text):
         return True
     if len(re.findall(r"[२३४५६]", text)) >= 2:
         return True
-    for stobha in ("हाउ", "होवा", "हावु", "औहोवा"):
-        if text.count(stobha) >= 1 and len(text) > len(stobha) * 3:
-            return True
     return False
 
 
