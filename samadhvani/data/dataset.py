@@ -73,6 +73,49 @@ IISH_CLIPS: dict[str, float] = {
 IISH_ALIGNED_CLIPS = tuple(f"SV{i:03d}" for i in range(1, 25))
 
 
+def _download(url: str, path, *, attempts: int = 3, timeout: int = 180,
+              min_bytes: int = 100_000, verbose: bool = False) -> None:
+    """Download ``url`` to ``path``, retrying transient failures.
+
+    A fetch loop makes two dozen sequential requests to archive.org and each one
+    can fail on its own: a dropped connection, a redirect that times out, a 503
+    from an overloaded storage node.  Without retries a single blip discards all
+    the clips already downloaded (the notebook then fails with "no segments"), so
+    the failure is expensive and unrelated to the code.
+
+    Backs off 2, 4, 8 s.  Raises the last exception if every attempt fails; the
+    caller decides whether one missing clip is fatal.
+    """
+    import time
+
+    last: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as r, open(path, "wb") as fh:
+                while True:
+                    chunk = r.read(1 << 20)
+                    if not chunk:
+                        break
+                    fh.write(chunk)
+            if path.stat().st_size < min_bytes:
+                raise IOError(
+                    f"only {path.stat().st_size} bytes — the server returned 200 but "
+                    "sent (almost) nothing, which is what archive.org does when an "
+                    "item is unavailable. Every real clip here is >30 MB.")
+            return
+        except Exception as exc:
+            last = exc
+            if path.exists():
+                path.unlink()
+            if attempt + 1 < attempts:
+                wait = 2 ** (attempt + 1)
+                if verbose:
+                    print(f"\n    retry {attempt + 1}/{attempts - 1} in {wait}s ({exc})",
+                          end="", flush=True)
+                time.sleep(wait)
+    raise last if last else IOError("download failed")
+
+
 def fetch_iish(dest: str, clips: tuple[str, ...] = IISH_ALIGNED_CLIPS,
                verbose: bool = True) -> list[str]:
     """Download IISH sāmagāna clips from archive.org.  Idempotent and resumable.
@@ -101,12 +144,7 @@ def fetch_iish(dest: str, clips: tuple[str, ...] = IISH_ALIGNED_CLIPS,
         if verbose:
             print(f"  ↓ {name}.mp3 …", end="", flush=True)
         try:
-            with urllib.request.urlopen(url, timeout=120) as r, open(path, "wb") as fh:
-                while True:
-                    chunk = r.read(1 << 20)
-                    if not chunk:
-                        break
-                    fh.write(chunk)
+            _download(url, path, attempts=3, verbose=verbose)
         except Exception as exc:
             print(f"  ! {name}: {exc}")
             if path.exists():
@@ -144,12 +182,7 @@ def fetch_pcr(dest: str, volumes: int = 2, verbose: bool = True) -> list[str]:
         if verbose:
             print(f"  ↓ {path.name} …", end="", flush=True)
         try:
-            with urllib.request.urlopen(url, timeout=300) as r, open(path, "wb") as fh:
-                while True:
-                    chunk = r.read(1 << 20)
-                    if not chunk:
-                        break
-                    fh.write(chunk)
+            _download(url, path, attempts=3, verbose=verbose)
         except Exception as exc:
             print(f"  ! {exc}")
             continue
@@ -246,6 +279,21 @@ def segment_clip(path: str, *, text_lines: list[str] | None = None,
     return segs
 
 
+def _safe_duration(path: str) -> float:
+    """Duration in seconds, or 0.0 if the file cannot be probed.
+
+    ``soundfile.info`` reads the header only — no decode — which is what makes this
+    cheap enough to call on a 44-minute MP3 just to print a progress number.
+    """
+    try:
+        import soundfile as sf
+
+        info = sf.info(path)
+        return float(info.frames) / max(info.samplerate, 1)
+    except Exception:
+        return 0.0
+
+
 def build_corpus(files: list[str], out_npz: str, out_jsonl: str | None = None,
                  *, text_lines: list[str] | None = None, max_hours: float = 4.0,
                  model: str = "gramageya", verbose: bool = True) -> dict:
@@ -258,6 +306,7 @@ def build_corpus(files: list[str], out_npz: str, out_jsonl: str | None = None,
     budget = max_hours * 3600.0
     segs: list[Segment] = []
     used = 0.0
+    seen = 0.0
     for path in files:
         if used >= budget:
             break
@@ -266,6 +315,16 @@ def build_corpus(files: list[str], out_npz: str, out_jsonl: str | None = None,
             used += s.frames * HOP / SR
             if used >= budget:
                 break
+        # Report how far through the whole archive this cap takes you, so "4 h" is
+        # a quantity people can check against the 15.8 h they chose not to use.
+        seen += _safe_duration(path)
+    if verbose and files:
+        frac = used / max(seen, 1e-9)
+        note = ""
+        if used < budget * 0.9:
+            note = "  <- cap not reached: ran out of clips, not of budget"
+        print(f"  {used/3600:.2f} h from {seen/3600:.2f} h of audio "
+              f"({frac*100:.0f} % of the files given){note}")
     if not segs:
         # ValueError, not SystemExit: these functions are called from notebook
         # cells, where SystemExit tears the kernel down instead of raising a

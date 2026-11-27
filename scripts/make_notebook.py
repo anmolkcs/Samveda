@@ -53,45 +53,104 @@ scale** and is the default; 15.8 is available and does not need it. Start with 4
 cells.append(md("""
 ## 1 · Setup
 
-Clones the repo (once), installs the two things that are not in the Kaggle image,
-and checks the GPU.
+Clones the repo (once) and checks that the environment can import it. It installs
+**nothing that Kaggle already ships**, which is a deliberate rule explained in the
+cell — the short version is that pip-managing numpy next to the image's compiled
+scipy is how you get an unsolvable import error twenty minutes in.
 """))
 
 cells.append(code("""
+# --------------------------------------------------------------------------- #
+# Setup.  Installs as little as possible, on purpose.
+#
+# An earlier version of this cell ran `pip install "numpy<2" scipy soundfile` to
+# match this repo's local venv. On Kaggle that replaces the numpy the image's own
+# scipy was *compiled* against, and the failure is not a clean "incompatible
+# numpy" message: scipy dies partway through `import numpy as np` with
+#     ModuleNotFoundError: No module named 'numpy.char'
+# (numpy 2 removed numpy.char as a submodule; a 1.26 leftover reappeared).
+# numpy reports 2.1.3, scipy is broken, and it needs a *new session* to recover.
+#
+# So: this cell never pip-installs numpy, scipy or torch. Everything the project
+# uses -- numpy, scipy.signal.{butter,sosfilt,lfilter,fftconvolve}, torch -- is
+# already in the image and already consistent with itself.
+# --------------------------------------------------------------------------- #
 import os, sys, subprocess
 
 REPO = os.environ.get("SAMADHVANI_REPO", "")
 if not REPO:
-    REPO = "samveda" if os.path.isdir("samveda/samadhvani") else ""
-if not REPO:
-    if not os.path.isdir("Samveda/samadhvani") and not os.path.isdir("samadhvani"):
-        subprocess.run(["git", "clone", "--depth", "1",
-                        "https://github.com/anmolkcs/Samveda.git", "samveda"],
-                       check=True)
+    if os.path.isdir("samveda/samadhvani"):
         REPO = "samveda"
+    elif os.path.isdir("Samveda/samadhvani"):
+        REPO = "Samveda"
+    elif os.path.isdir("samadhvani"):
+        REPO = "."
     else:
-        REPO = "Samveda" if os.path.isdir("Samveda/samadhvani") else "."
+        r = subprocess.run(["git", "clone", "--depth", "1",
+                            "https://github.com/anmolkcs/Samveda.git", "samveda"],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            raise RuntimeError(
+                "Could not clone the repository. Turn internet on "
+                "(Settings -> Internet -> On) and re-run this cell. " + r.stderr[-400:])
+        REPO = "samveda"
 os.chdir(REPO)
 sys.path.insert(0, os.getcwd())
 print("repo:", os.getcwd())
 
-# soundfile decodes MP3 and, crucially, seeks inside it — without it a 44-minute
-# clip has to be decoded whole just to read one phrase.
-#
-# Deliberately NOT pinned: `numpy<2` would replace the numpy that Kaggle's own
-# torch/scipy were built against, and pip resolves that by pulling a second scipy
-# too. Nothing here needs numpy 1.x, so leave the image alone.
-subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-U",
-                "soundfile"], check=False)
+# soundfile is the one genuinely missing piece: it decodes and, crucially, *seeks
+# inside* MP3, so reading one phrase from a 44-minute clip costs milliseconds.
+# --no-deps because its dependencies (cffi, numpy) ship with the image.
+try:
+    import soundfile as sf
+    assert "MP3" in sf.available_formats(), "libsndfile built without MP3"
+except Exception:
+    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--no-deps",
+                    "soundfile"], check=False)
+    try:
+        import soundfile as sf
+    except ImportError as exc:
+        raise RuntimeError(
+            "soundfile is needed to decode the MP3s and could not be installed. "
+            "Turn internet on (Settings -> Internet -> On) and re-run this cell."
+        ) from exc
 
 import numpy as np, torch
-print("torch", torch.__version__, "| cuda", torch.cuda.is_available(),
-      "| device", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu")
-print("numpy", np.__version__)
+print("numpy", np.__version__, "| torch", torch.__version__,
+      "| cuda", torch.cuda.is_available(),
+      "|", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu")
+if not torch.cuda.is_available():
+    print("  no GPU attached — Settings -> Accelerator -> GPU T4 x2. "
+          "Training still works on CPU, just slower.")
 """))
 
 cells.append(md("""
-## 2 · Settings
+## 2 · Check the environment before spending 20 minutes on it
+
+A download is slow and a broken import is instant, so prove the imports work
+*first*. This cell exists because the previous version of this notebook failed at
+the fetch step with a scipy/numpy mismatch that could have been detected here in
+one second.
+"""))
+
+cells.append(code("""
+# Fail fast: if these import, the rest of the notebook will run.
+import scipy, importlib
+from scipy.signal import butter, sosfilt, lfilter, fftconvolve
+
+for mod in ("samadhvani.audio.mel", "samadhvani.data.dataset",
+            "samadhvani.train.voice_trainer", "samadhvani.synth.voice_render",
+            "samadhvani.pipeline"):
+    importlib.import_module(mod)
+
+from samadhvani.audio.mel import SR, HOP, N_MELS
+print(f"imports OK — numpy {np.__version__}, scipy {scipy.__version__}, "
+      f"{SR} Hz, hop {HOP}, {N_MELS} mel bands")
+print(f"cuda available: {torch.cuda.is_available()}")
+"""))
+
+cells.append(md("""
+## 3 · Settings
 
 `HOURS` is the corpus size. 4 h matches the scale of the published reference system
 (Vāgdhenu, ~5 h); more audio stops helping a model this small long before it stops
@@ -111,7 +170,7 @@ print(f"target: {HOURS} h from {CLIPS} clips, {EPOCHS} epochs max")
 """))
 
 cells.append(md("""
-## 3 · Get the audio
+## 4 · Get the audio
 
 IISH Global's complete Kauthuma sāmagāna has been on archive.org since 2013 as
 `IISHSamaVeda`. Clips 1–24 finish Grāma-gāna and Āraṇyaka-gāna, which are the two
@@ -134,7 +193,7 @@ if not files:
 """))
 
 cells.append(md("""
-## 4 · Build the corpus
+## 5 · Build the corpus
 
 Cut each recording into breath groups — the phrases a reciter actually sings in one
 breath — and turn each into a log-mel frame stack.
@@ -158,7 +217,7 @@ print(f"\\n{rep['segments']} segments, {rep['hours']:.2f} h, "
 """))
 
 cells.append(md("""
-## 5 · Pitch, once
+## 6 · Pitch, once
 
 F0 is recovered from the audio by autocorrelation — the melody-in-the-recording, not
 the melody-in-the-notation, which is what the voice model conditions on. This is the
@@ -171,7 +230,7 @@ add_f0_to_corpus(WORK + "/corpus.npz")
 """))
 
 cells.append(md("""
-## 6 · Train
+## 7 · Train
 
 Watch the **validation** number, not the training one. The model predicts a log-mel
 *residual* against the corpus mean, so the first epoch is already at "average frame";
@@ -194,7 +253,7 @@ metrics
 """))
 
 cells.append(md("""
-## 7 · Listen — rule engine vs trained voice
+## 8 · Listen — rule engine vs trained voice
 
 Same verse, same melody, same timing. The only difference is the spectral envelope.
 Both are scored by decoding pitch from the waveform at each scheduled note, so the
@@ -250,7 +309,7 @@ except Exception:
 """))
 
 cells.append(md("""
-## 8 · What you just built, and what it is not
+## 9 · What you just built, and what it is not
 
 **It is** a voice model trained on real Sāmagāna, and a pipeline that goes from
 archive.org to audio with no manual annotation. The melody is notation-driven and
@@ -274,7 +333,7 @@ sing text it has never seen in this voice.
 """))
 
 cells.append(md("""
-## 9 · Try your own verse
+## 10 · Try your own verse
 
 Paste any gāna text with its svara numerals (१–७) and it will be read from the
 notation. Without numerals it will use the school's default melodic skeleton — and
