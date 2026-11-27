@@ -16,288 +16,278 @@ def code(s):
 cells = []
 
 cells.append(md("""
-# समध्वनि · Samadhvani — train a Sāmaveda chant TTS on a free Kaggle GPU
+# समध्वनि · Samadhvani — train a Sāmaveda chant voice on a free Kaggle GPU
 
-This notebook takes you from an empty Kaggle session to a chant synthesiser you can
-listen to, well inside a single T4 session.
+**This notebook needs no manual steps.** Run all cells and it will:
 
-**What gets trained.** Not a full waveform model. Two small ones:
+1. install the repo and its dependencies (a few minutes);
+2. **download real Sāmagāna audio** from archive.org — IISH's complete Kauthuma
+   Āraṇyaka/Grāma-gāna set;
+3. segment it into breath groups and pack a training corpus;
+4. extract per-frame pitch (this is the slow CPU step, done once);
+5. **train the voice model**, and print whether it beat its baseline;
+6. render the same verse twice — rule engine vs trained voice — so you can hear the
+   difference, with a melody score for each.
 
-| model | learns | params | why |
-|---|---|---|---|
-| `DurationPredictor` | how long each phone is held | ~0.4 M | the biggest intelligibility win; trains in minutes |
-| `SpectrogramModel` | F1/F2/F3 + voice/noise per frame | ~2.5 M | small enough to converge on 3–5 h of audio |
+**Turn on the GPU first:** *Settings → Accelerator → GPU T4 x2* (or P100).
+The notebook works on CPU too, just slower.
 
-**What does *not* get trained.** The melody. F0 comes from the svara sequence and the
-sāma scale, computed exactly. A network that predicted pitch could only add drift.
+**What is trained, and what is not.** The melody is *not* learned: svaras come from
+the notation and F0 is computed exactly. What the model learns is the singer's
+spectral envelope — the part that makes one uḍgātṛ sound unlike another.
 
-**Before you run it.** Read section 3. Training data for Sāma chant is the hard part
-and the licences are not uniform — the audit below prints exactly what you may and may
-not use. Do not quietly train on a YouTube upload and ship the weights.
+| stage | what | time on a T4 session |
+|---|---|---|
+| download 24 clips | ~0.9 GB of MP3 | 2–5 min |
+| segment + pack | 15.8 h → breath groups | 10–20 min (CPU) |
+| pitch track | per-frame F0 | 5–15 min (CPU) |
+| train | ~0.3 M params | 3–10 min |
 
-**Turn on the GPU:** *Settings → Accelerator → GPU T4 x2* (or P100).
+Set `HOURS` below to control how much audio you use. **4 hours is the Vāgdhenu
+scale** and is the default; 15.8 is available and does not need it. Start with 4.
 """))
 
 cells.append(md("""
 ## 1 · Setup
 
-The package is a normal Python project (`samadhvani/`). This installs what is missing
-and pulls the repo into the session.
-
-> If the notebook is running from the repo itself (recommended), set `REPO = "."`.
+Clones the repo (once), installs the two things that are not in the Kaggle image,
+and checks the GPU.
 """))
 
 cells.append(code("""
 import os, sys, subprocess
 
-REPO = os.environ.get("SAMADHVANI_REPO", ".")
-if not os.path.isdir(os.path.join(REPO, "samadhvani")):
-    subprocess.run(["git", "clone", "--depth", "1",
-                    "https://github.com/anmolkcs/Samveda.git", "samveda"], check=True)
-    REPO = "samveda"
-
+REPO = os.environ.get("SAMADHVANI_REPO", "")
+if not REPO:
+    REPO = "samveda" if os.path.isdir("samveda/samadhvani") else ""
+if not REPO:
+    if not os.path.isdir("Samveda/samadhvani") and not os.path.isdir("samadhvani"):
+        subprocess.run(["git", "clone", "--depth", "1",
+                        "https://github.com/anmolkcs/Samveda.git", "samveda"],
+                       check=True)
+        REPO = "samveda"
+    else:
+        REPO = "Samveda" if os.path.isdir("Samveda/samadhvani") else "."
 os.chdir(REPO)
 sys.path.insert(0, os.getcwd())
+print("repo:", os.getcwd())
 
+# soundfile decodes MP3 and, crucially, seeks inside it — without it a 44-minute
+# clip has to be decoded whole just to read one phrase.
 subprocess.run([sys.executable, "-m", "pip", "install", "-q",
-                "numpy", "scipy", "soundfile"], check=False)
+                "numpy<2", "scipy", "soundfile"], check=False)
 
-import torch, numpy as np
+import numpy as np, torch
 print("torch", torch.__version__, "| cuda", torch.cuda.is_available(),
       "| device", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu")
 print("numpy", np.__version__)
 """))
 
 cells.append(md("""
-## 2 · Check the pipeline works before spending GPU time
+## 2 · Settings
 
-A 20-second sanity pass. If the frontend is broken, training on it wastes a GPU-hour,
-so verify text → phones → svara → audio first.
+`HOURS` is the corpus size. 4 h matches the scale of the published reference system
+(Vāgdhenu, ~5 h); more audio stops helping a model this small long before it stops
+costing you session time. `CLIPS` is how many of IISH's 24 Āraṇyaka/Grāma-gāna
+recordings to pull — 24 is all of them, and they are the ones whose text is
+transcribed.
+"""))
+
+cells.append(code("""
+HOURS   = 4.0      # corpus cap. 4 = Vāgdhenu scale. Raise to 15.8 for everything.
+CLIPS   = 24       # IISH clips to download (1-24 are the transcribed books)
+EPOCHS  = 60       # voice model epochs; early stopping usually fires before this
+BATCH   = 16
+WORK    = "work"
+os.makedirs(WORK, exist_ok=True)
+print(f"target: {HOURS} h from {CLIPS} clips, {EPOCHS} epochs max")
+"""))
+
+cells.append(md("""
+## 3 · Get the audio
+
+IISH Global's complete Kauthuma sāmagāna has been on archive.org since 2013 as
+`IISHSamaVeda`. Clips 1–24 finish Grāma-gāna and Āraṇyaka-gāna, which are the two
+books whose text is transcribed, and they total 15.8 hours.
+
+The download is resumable: re-running skips clips already present at the right size,
+so an interrupted session costs only what it had not finished.
+"""))
+
+cells.append(code("""
+from samadhvani.data.dataset import fetch_iish, IISH_ALIGNED_CLIPS
+
+clips = IISH_ALIGNED_CLIPS[:CLIPS]
+files = fetch_iish(WORK + "/clips", clips=clips)
+total_mb = sum(os.path.getsize(f) for f in files) / 1e6
+print(f"\\n{len(files)}/{len(clips)} clips, {total_mb:.0f} MB")
+if not files:
+    print("No clips downloaded. Check that internet is enabled for this notebook "
+          "(Settings -> Internet -> On).")
+"""))
+
+cells.append(md("""
+## 4 · Build the corpus
+
+Cut each recording into breath groups — the phrases a reciter actually sings in one
+breath — and turn each into a log-mel frame stack.
+
+Segmentation is by energy, not by the transcriber's timestamps. That is a deliberate
+trade-off and worth understanding:
+
+* **what it gives you:** supervised acoustics with no annotation work at all;
+* **what it cannot give you:** which gāna each phrase is, so it learns *timbre*, not
+  *melody*. Melody supervision needs the text aligned to audio, which is the next
+  milestone (see `docs/DATA-ADDENDUM.md`).
+"""))
+
+cells.append(code("""
+from samadhvani.data.dataset import build_corpus
+
+rep = build_corpus(files, WORK + "/corpus.npz", WORK + "/corpus.jsonl",
+                   max_hours=HOURS)
+print(f"\\n{rep['segments']} segments, {rep['hours']:.2f} h, "
+      f"{rep['frames_per_segment']} frames each, {rep['size_mb']:.0f} MB packed")
+"""))
+
+cells.append(md("""
+## 5 · Pitch, once
+
+F0 is recovered from the audio by autocorrelation — the melody-in-the-recording, not
+the melody-in-the-notation, which is what the voice model conditions on. This is the
+slowest CPU step; doing it before training means the GPU session is not spent on it.
+"""))
+
+cells.append(code("""
+from samadhvani.train.voice_trainer import add_f0_to_corpus
+add_f0_to_corpus(WORK + "/corpus.npz")
+"""))
+
+cells.append(md("""
+## 6 · Train
+
+Watch the **validation** number, not the training one. The model predicts a log-mel
+*residual* against the corpus mean, so the first epoch is already at "average frame";
+what matters is how far below that it gets.
+
+The printed `improvement %` is the honest headline: if it is near zero, the model has
+learned nothing about this voice and the render will sound like the rule engine.
+"""))
+
+cells.append(code("""
+from samadhvani.train.voice_trainer import VoiceConfig, train_voice
+
+metrics = train_voice(
+    WORK + "/corpus.npz",
+    WORK + "/voice.pt",
+    VoiceConfig(epochs=EPOCHS, batch_size=BATCH,
+                device="cuda" if torch.cuda.is_available() else "cpu"),
+)
+metrics
+"""))
+
+cells.append(md("""
+## 7 · Listen — rule engine vs trained voice
+
+Same verse, same melody, same timing. The only difference is the spectral envelope.
+Both are scored by decoding pitch from the waveform at each scheduled note, so the
+number reflects what came out, not what went in.
+
+**The one guarantee that matters:** the trained voice must not lose melody. The
+correction is bounded and frequency-tapered precisely so it cannot.
 """))
 
 cells.append(code("""
 from samadhvani.pipeline import chant, ChantOptions
+from samadhvani.audio.mel import SR
+from samadhvani.eval.metrics import _median_f0
+from samadhvani.text.svaras import SAMA_SVARAS
 
-verse = "हाउ अ॒ग्निमी॑ळे पु॒रोहि॑तं य॒ज्ञस्य॑ दे॒वमृ॒त्विज॑म्"
+semis = {k: v["semitone"] for k, v in SAMA_SVARAS.items()}
 
-c = chant(verse, ChantOptions(mode="auto"))
-print(f"mode      : {c.mode}")
-print(f"aksaras   : {len(c.syllables)}")
-print(f"svaras    : {c.svaras}")
-print(f"phones    : {c.phones[:5]} ...")
-print(f"duration  : {c.duration:.2f} s")
-c.save("sanity.wav")
+def per_note(audio, notes, tonic):
+    out = []
+    for n in notes:
+        mid = n.start + n.duration * 0.5
+        seg = audio[int((mid - 0.06) * SR):int((mid + 0.06) * SR)]
+        if len(seg) < 256:
+            out.append(None); continue
+        f = _median_f0(seg, SR, 70, 400)
+        out.append(min(semis, key=lambda k: abs(semis[k] * 100
+                                                - 1200 * np.log2(f / tonic)))
+                   if f > 0 else None)
+    return out
+
+def score(c):
+    got = per_note(np.asarray(c.audio, dtype=np.float32), c.notes, c.tonic_hz)
+    ok = sum(1 for r, g in zip(c.svaras, got) if r == g)
+    return 100.0 * ok / max(len(c.svaras), 1)
+
+verse = "हाउ ४ अ॒ग्निमी॑ळे ३ पु॒रोहि॑तं २ य॒ज्ञस्य॑ १ दे॒वमृ॒त्विज॑म्"
+ckpt = WORK + "/voice.pt"
+
+a = chant(verse, ChantOptions(mode="gana", laya=0.4))
+b = chant(verse, ChantOptions(mode="gana", laya=0.4, engine="voice", checkpoint=ckpt))
+a.save("01_rule_engine.wav")
+b.save("02_trained_voice.wav")
+print(f"rule engine  : {a.duration:5.1f} s, {len(a.notes):2d} notes, melody {score(a):5.1f}%")
+print(f"trained voice: {b.duration:5.1f} s, {len(b.notes):2d} notes, melody {score(b):5.1f}%")
+print("\\nfiles: 01_rule_engine.wav  02_trained_voice.wav")
 
 try:
     from IPython.display import Audio, display
-    display(Audio("sanity.wav"))
+    display(Audio("01_rule_engine.wav"))
+    display(Audio("02_trained_voice.wav"))
 except Exception:
-    print("(no notebook audio here; open sanity.wav)")
+    pass
 """))
 
 cells.append(md("""
-## 3 · The data question (read this)
+## 8 · What you just built, and what it is not
 
-Two very different resources, and only one of them is the bottleneck:
+**It is** a voice model trained on real Sāmagāna, and a pipeline that goes from
+archive.org to audio with no manual annotation. The melody is notation-driven and
+exact; the timbre is measured from the recordings.
 
-* **Text — complete and free.** The four Sāma-gāna books (Grāma-geya 1,198 gāna,
-  Āraṇyaka 296, Ūha 936, Ūhya 209) were typeset with Vedic accents and sāma numerals in
-  January 2025. That is the whole Kauthuma corpus: **2,639 gāna**. "Free" is not "open":
-  the typesetting is `PPN ©` and the download terms are fair-use-for-education.
-* **Audio — 67 h, none of it openly licensed.** The find is IISH's complete Kauthuma
-  sāmagāna (43.2 h, archive.org since 2013), whose transcription carries clip numbers
-  and minute:second stamps — so **15.8 h arrive pre-aligned**, three times what the
-  Vāgdhenu paper used, with no annotation work.
+**It is not** a full neural TTS. Two honest gaps:
 
-**Two axes, kept apart.** *May I redistribute?* is a licence question; *may I train on
-it and run it for teaching?* is an intended-use question. Under the default
-`educational` profile (not distributed, not commercial) ~67 h are trainable. None of it
-is shippable.
+1. **Phase is reconstructed, not generated.** The vocoder is a harmonic synthesiser
+   driven by the pitch contour, so sustained notes have a slight synthetic edge. A
+   neural vocoder is the fix, and it needs the same corpus you just packed.
+2. **Melody is not learned yet.** It comes from the notation, which for a gāna text
+   is exactly right. For *un-notated* text, nothing here invents a melody — that is
+   why the demo refuses to guess and says so.
 
-Run the audit and see both numbers.
+## Where the next real gain is
+
+Text-to-audio alignment. The transcriber's manuscripts print a clip number and a
+minute:second stamp beside every line, so the mapping exists — it needs transcribing.
+With it, the model conditions on phonemes rather than just pitch, and then it can
+sing text it has never seen in this voice.
+"""))
+
+cells.append(md("""
+## 9 · Try your own verse
+
+Paste any gāna text with its svara numerals (१–७) and it will be read from the
+notation. Without numerals it will use the school's default melodic skeleton — and
+say so, rather than pretending to know the sāman.
 """))
 
 cells.append(code("""
-from samadhvani.data.sources import audit
-report = audit()                 # educational profile, the default
-report_open = audit(verbose=False, profile="open")   # what survives publication
-print("trainable:", report["audio_hours_trainable"], "h")
-print("releasable:", report_open["audio_hours_trainable"], "h  <- publish this and your corpus vanishes")
+mine = "ओ३म् भूर्भुव॒: स्व॒: तत्स॑वि॒तुर्वरेᣚण्यं॒ भर्गो॑ दे॒वस्य॑ धीमहि"
+c = chant(mine, ChantOptions(mode="auto", laya=0.4, engine="voice", checkpoint=ckpt))
+c.save("03_mine.wav")
+print("mode:", c.mode, "| notes:", len(c.notes), f"| {c.duration:.1f} s")
+for note in c.caveats:
+    print(" ·", note)
+try:
+    from IPython.display import Audio, display
+    display(Audio("03_mine.wav"))
+except Exception:
+    pass
 """))
 
-cells.append(md("""
-### 3a · Two honest ways forward
-
-**A — text-only (works today, no audio).** Build the corpus from the gāna books. This
-supervises durations and melody, but not timbre: it will not learn a particular
-singer's voice. Still worth doing — it produces the correct svara/phone alignments that
-a later audio run fine-tunes from.
-
-**B — five hours of your own recording (the real answer).** Consented, single singer,
-one microphone, aligned at akṣara level. That beats every public source on the list.
-Protocol in `docs/DATA.md`. The alignment needs only **one timestamp per breath group**,
-because Sāma timing really is mātrā-proportional — 30 seconds of annotation for a
-10-minute recording.
-"""))
-
-cells.append(code("""
-import os
-os.makedirs("work", exist_ok=True)
-
-# One verse per line. Replace with text extracted from the gāna books — or paste
-# your own gāna text with its svara numerals, which the parser reads directly.
-sample = "\\n".join([
-    "हाउ अ॒ग्निमी॑ळे पु॒रोहि॑तं य॒ज्ञस्य॑ दे॒वमृ॒त्विज॑म्",
-    "होता॑रं रत्न॒धात॑मम्",
-    "इ॒षे त्वो॒र्जे त्वा॑ वा॒यव॑ स्थ दे॒वो व॑: सवि॒ता प्रार्प॑यतु",
-    "अग्न॒ आयूं॑षि प॒वसे॒ आ सु॒वीर्यं॒ यथा॑ देवा॒ना न म॑र्त्यः",
-    "हाउ होवा अ॒ग्न आयूं॑षि प॒वसे॑ हाउ होवा",
-    "ओ३म् भूर्भुव॒: स्व॒: तत्स॑वि॒तुर्वरे᳚ण्यं॒ भर्गो॑ दे॒वस्य॑ धीमहि",
-]) + "\\n"
-open("work/sample.txt", "w", encoding="utf-8").write(sample * 24)   # stand in for a real corpus
-
-from samadhvani.data.build import build_text_corpus
-n = build_text_corpus(["work/sample.txt"], "work/text_corpus.jsonl")
-print(f"text corpus: {n} records")
-
-# With real recordings, this is the shape (see docs/DATA.md):
-#   from samadhvani.data.build import build_audio_manifest
-#   n = build_audio_manifest("work/clips", "work/manifest.jsonl")
-#
-# sidecar format, one per clip:
-#   {"audio": "clip01.wav", "text": "...gana text...",
-#    "line_starts": [0.0, 4.2, 9.8], "school": "kauthuma", "licence": "open"}
-"""))
-
-cells.append(md("""
-## 4 · Train
-
-Two stages. The duration model converges in minutes even on CPU; the spectral model
-wants the GPU. Watch the *validation* curve, not the training curve.
-"""))
-
-cells.append(code("""
-from samadhvani.train.trainer import TrainConfig, train
-
-cfg = TrainConfig(
-    epochs_duration=40,
-    epochs_spectral=60,
-    batch_size=16,
-    lr=3e-4,
-    hidden=128,
-    device="cuda" if torch.cuda.is_available() else "cpu",
-)
-
-ckpt = train("work/text_corpus.jsonl", "work/samadhvani.pt", cfg)
-print("checkpoint:", ckpt, round(os.path.getsize(ckpt) / 1e6, 1), "MB")
-"""))
-
-cells.append(md("""
-## 5 · Listen: rule engine vs trained engine
-
-The same verse through both paths. The formant engine is the baseline — if the trained
-model does not beat it, the checkpoint is not ready, and you can hear where it fails
-(usually the vowels smear, which means the formant loss needs more weight or the data
-more variety).
-
-Note what is *identical* in both: the melody. The svara sequence is given by the
-tradition; only the phonetics come from the model.
-"""))
-
-cells.append(code("""
-from samadhvani.pipeline import chant, ChantOptions
-from samadhvani.eval import evaluate
-
-for label, opts in [("formant", ChantOptions(engine="formant")),
-                    ("neural", ChantOptions(engine="neural",
-                                            checkpoint="work/samadhvani.pt"))]:
-    c = chant(verse, opts)
-    fn = label + ".wav"
-    c.save(fn)
-    rep = evaluate(c)
-    sm = rep.svara_metrics
-    print(f"--- {label} ---")
-    print(f"  svara accuracy {sm.get('svara_accuracy', 0):.0%}"
-          f" | pitch err {sm.get('median_abs_cents_error', 0):.1f} cents"
-          f" | periodicity {rep.audio_metrics['periodicity']:.3f}")
-    try:
-        from IPython.display import Audio, display
-        display(Audio(fn))
-    except Exception:
-        print("  (open", fn, ")")
-"""))
-
-cells.append(md("""
-## 6 · Score the melody from the audio, not from the plan
-
-`svara_accuracy_at_notes` decodes pitch inside each scheduled note and checks which
-sāma svara it lands on. The evaluator is only trustworthy because it is
-octave-corrected: a naive autocorrelation tracker reports a 147 Hz note as 294 Hz and
-halves the score of perfect singing.
-"""))
-
-cells.append(code("""
-from samadhvani.eval.metrics import svara_accuracy_at_notes
-
-c = chant(verse, ChantOptions(engine="formant"))
-res = svara_accuracy_at_notes(c)
-print(f"checked {res['n_notes']} notes | accuracy {res['accuracy']:.0%}"
-      f" | median |cents| error {res['median_abs_cents_error']:.1f}")
-print("per note:", res["per_note"][:8], "...")
-"""))
-
-cells.append(md("""
-## 7 · Measure real melody contours (once you have audio)
-
-The skeletons in `samadhvani/models/sama_models.py` are prior knowledge. With
-recordings you can replace them with *measured* contours: the builder takes the median
-svara per position across utterances and writes JSON in the same schema, which the
-pipeline then prefers.
-"""))
-
-cells.append(code("""
-from samadhvani.data.build import measure_contours
-k = measure_contours("work/text_corpus.jsonl", "work/models_learned.json")
-print(f"wrote {k} measured models")
-
-blob = json.load(open("work/models_learned.json")) if "json" in dir() else None
-if blob is None:
-    import json
-    blob = json.load(open("work/models_learned.json"))
-for key, entry in blob["models"].items():
-    print(key, "->", [s["svara"] for s in entry["sections"][0]][:12], "...")
-"""))
-
-cells.append(md("""
-## 8 · Save your work
-
-Kaggle sessions are ephemeral. Save the checkpoint to *Output* so you can download it
-or attach it to a later notebook as a dataset. A checkpoint this small is easy to keep.
-"""))
-
-cells.append(code("""
-import shutil
-shutil.copy("work/samadhvani.pt", "samadhvani.pt")
-print(f"samadhvani.pt: {os.path.getsize('samadhvani.pt') / 1e6:.1f} MB")
-print("also written: sanity.wav, formant.wav, neural.wav, work/models_learned.json")
-"""))
-
-cells.append(md("""
-## Where to go next
-
-1. **Get audio.** Everything above is a demonstration on synthetic targets. The moment
-   you have a few hours of real recitation, the spectral model starts learning timbre
-   rather than reproducing the inventory table, and the difference is large.
-   See `docs/DATA.md`.
-2. **Then a vocoder.** With 10+ hours you can replace the formant cascade with HiFi-GAN.
-   The acoustic model needs no change, because it predicts formant tracks and levels,
-   not waveforms.
-3. **Widen the schools.** Kauthuma, Rāṇāyanīya and Jaiminīya differ most in stobhas and
-   register. The `school` setting already switches stobhas and shifts the tonic; a
-   corpus per school is the next real gain.
-4. **Do a listening test.** A blind MOS panel of 5–8 Sāma reciters, with traditional
-   recordings as controls. A proxy metric is not a MOS.
-"""))
 
 nb = {
     "cells": cells,

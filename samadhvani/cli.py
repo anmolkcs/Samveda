@@ -118,7 +118,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--intensity", type=float, default=0.8)
     p.add_argument("--room", type=float, default=0.18)
     p.add_argument("--breath", type=float, default=0.20)
-    p.add_argument("--engine", default="formant", choices=["formant", "neural"])
+    p.add_argument("--engine", default="formant",
+                   choices=["formant", "voice", "neural"],
+                   help="formant (built in), voice (trained voice colour), "
+                        "neural (legacy v1)")
     p.add_argument("--checkpoint", default=None)
     p.add_argument("--seed", type=int, default=7)
     p.add_argument("-v", "--verbose", action="store_true")
