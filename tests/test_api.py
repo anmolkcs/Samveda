@@ -124,3 +124,24 @@ def test_data_endpoint_is_honest():
     assert keys["youtube_samagana"]["train"] is False
     assert keys["youtube_samagana"]["licence"] == "unclear"
     assert "blocked" in d["report"]
+
+
+def test_data_endpoint_separates_licence_from_intended_use():
+    """`train` is the licence answer; `may_train` is the profile answer."""
+    d = client.get("/api/data").json()
+    keys = {s["key"]: s for s in d["sources"]}
+    iish = keys["iish_samagana"]
+    assert iish["train"] is False          # no open licence
+    assert iish["may_train"] is True       # but fine for non-distributed teaching
+    assert iish["may_ship_weights"] is False
+    assert iish["permit_reason"]
+    assert d["report"]["profile"] == "educational"
+    assert {p["key"] for p in d["profiles"]} >= {"open", "educational", "evaluation"}
+
+
+def test_data_endpoint_accepts_a_profile_and_rejects_a_bad_one():
+    d = client.get("/api/data", params={"profile": "open"}).json()
+    keys = {s["key"]: s for s in d["sources"]}
+    assert keys["iish_samagana"]["may_train"] is False
+    assert keys["own_recordings"]["may_train"] is True
+    assert client.get("/api/data", params={"profile": "nope"}).status_code == 400

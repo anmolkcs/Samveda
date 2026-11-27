@@ -9,10 +9,11 @@ directly, or the re-exports below which import lazily.
 
 from __future__ import annotations
 
-from .sources import SOURCES, Licence, Source, audit
+from .sources import DEFAULT_PROFILE, PROFILES, SOURCES, Licence, Permit, Profile, Source, audit
 
 __all__ = [
-    "SOURCES", "Licence", "Source", "audit",
+    "SOURCES", "DEFAULT_PROFILE", "PROFILES", "Licence", "Permit", "Profile",
+    "Source", "audit",
     "Record", "align_clip", "build_audio_manifest", "build_text_corpus",
     "measure_contours",
 ]

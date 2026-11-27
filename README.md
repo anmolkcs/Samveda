@@ -132,6 +132,7 @@ cell of it has been executed end to end. Or:
 
 ```bash
 python -m samadhvani.data.build audit                     # what you may train on
+python -m samadhvani.data.build audit --profile open       # what survives publishing
 python -m samadhvani.data.build text ganam/*.txt -o train.jsonl
 python -m samadhvani.train.trainer --manifest train.jsonl --out samadhvani.pt
 samadhvani chant "…" --engine neural --checkpoint samadhvani.pt
@@ -147,27 +148,45 @@ What trains, and what does not:
 
 ## The data question (read this before training)
 
-Text is the easy half. Audio is the bottleneck, and much of what exists is not licensed
-for training. `samadhvani audit` prints the honest table:
+Text is the easy half. Audio is the bottleneck. `samadhvani audit` prints two tables,
+and the second one is the interesting one:
 
 ```
-trainable audio: 6.0 h   redistributable audio: 0.0 h
-text: 7514 gāna across 6 sources with svara notation
-BLOCKED (do not train a released model): youtube_samagana
-needs written permission: vhf_audio
+licence facts: 0.0 h of sāmagāna audio is openly licensed (0.0 h trainable-and-shippable)
+text: 2,639 gāna + 1,875 ṛc, 8 sources with svara notation (the saṃhitā exists in 4 copies; counted once)
+
+under the 'educational' profile — Educational, not distributed, not commercial
+  trainable audio: 67.3 h (15.8 h with line-level timings)
+  BLOCKED on provenance: youtube_samagana
+  needs written permission: ignca_cassettes, vhp_audio, vhp_jaiminiya
 ```
 
-* **Text — open and large.** ~7,500 gāna with Vedic accents and sāma numerals across the
-  four gāna books and the Kauthuma saṃhitā.
-* **Audio — small and encumbered.** The Vedic Heritage Portal recordings are excellent
-  and are published for listening, not for training. YouTube uploads are per-video and
-  usually unstated.
+* **Text — complete, and free since 2025.** All **2,639** Kauthuma gāna were typeset
+  with sāma numerals and accents in January 2025. (The previous version of this file
+  said "~7,500 gāna" — that was wrong: it added the same 1,875 ṛc four times, once per
+  provider, and mixed ṛc into a gāna count.)
+* **Audio — 67 hours, none of it openly licensed.** The find is `iish_samagana`: 43.2 h
+  of complete Kauthuma sāmagāna on archive.org since 2013, with PR Iyer's
+  transcriptions carrying **clip numbers and minute:second stamps per line**, so
+  **15.8 h arrive pre-aligned** — three times Vāgdhenu's budget, with no annotation work.
 
-The realistic path is **five hours of your own consented, single-singer recording** —
-which is the scale that comparable systems use. The recording protocol, the
-breath-group annotation scheme (one timestamp per breath group is enough, because Sāma
-timing really is mātrā-proportional) and the consent requirements are in
-[`docs/DATA.md`](docs/DATA.md).
+**One axis, not two.** *May I redistribute this?* is a licence question; *may I train on
+it and run it for teaching?* is an intended-use question. They are independent, and this
+repo keeps both answers:
+
+* Under the default `educational` profile (not distributed, not commercial), ~67 h are
+  trainable.
+* **None of it is shippable.** `samadhvani audit --profile open` returns `0.0 h`. A
+  downloadable open-licensed checkpoint of this voice cannot currently be built from
+  public data.
+
+That profile is a **promise about your conduct, not a licence you were granted**, and
+publishing a checkpoint or hosting the demo revives every restriction at once. The
+release path is still what it always was: **five hours of your own consented,
+single-singer recording**. Protocol, breath-group annotation (one timestamp per breath
+group is enough — Sāma timing really is mātrā-proportional) and consent terms are in
+[`docs/DATA.md`](docs/DATA.md); the full source survey with measured hours is in
+[`docs/DATA-ADDENDUM.md`](docs/DATA-ADDENDUM.md).
 
 ## Sanskrit details this gets right
 
@@ -222,11 +241,19 @@ pytest -q          # 145 passed
   with measured ones.
 * **The Jaiminīya and Rāṇāyanīya traditions** are represented by their stobha inventories
   and register, not by measured contours. Merging schools would be a factual error, so
-  they stay separate even where the data is thin.
+  they stay separate even where the data is thin. Concretely: all 15.8 aligned hours are
+  Kauthuma, the Jaiminīya school exists in this survey as **14 minutes on a 1968 LP**,
+  and Rāṇāyanīya exists only as provenance-unknown video. Neither can be trained.
+* **No pretrained voice, and no releasable one.** The 67 trainable hours are all
+  non-distributable. The corpus is real, the code is real, and a model trained on it
+  may be run for teaching — but it may not be published.
 * **Not a ritual authority.** This is a research and heritage-access tool. A recording of
   an uḍgātṛ is the authority; this is software that tries not to misrepresent itself.
 
 ## License
 
-MIT for the code. Text and audio carry the licences of their sources — run
-`samadhvani audit`, and read `docs/DATA.md` before publishing a checkpoint.
+MIT for the code. Text and audio carry the terms of their sources — **none of the
+public sāmagāna audio is openly licensed**, and the 2025 gāna typesetting is
+`PPN ©` while the Iyer manuscripts are CC BY-NC-ND. Run `samadhvani audit --profile
+open` before publishing a checkpoint; read [`docs/DATA-ADDENDUM.md`](docs/DATA-ADDENDUM.md)
+§4 before describing this project's data as open.

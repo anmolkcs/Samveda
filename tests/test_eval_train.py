@@ -279,6 +279,86 @@ def test_data_audit_is_honest():
     assert rep["audio_hours_releasable"] >= 0.0
 
 
+def test_educational_profile_unblocks_training_but_not_shipping():
+    """The intended-use profile is the point of the whole catalogue."""
+    from samadhvani.data.sources import by_key
+
+    iish = by_key("iish_samagana")
+    # strict licence answer: no open licence, so it is not trainable-and-shippable
+    assert iish.usable_for_training is False
+    assert iish.usable_for_release is False
+
+    edu = iish.permit("educational")
+    assert edu.may_train is True
+    assert edu.may_ship_audio is False
+    assert edu.may_ship_weights is False
+
+    # the moment you publish, it is gone again
+    assert iish.permit("open").may_train is False
+    # and listening was never the problem
+    assert iish.permit("evaluation").may_train is False
+
+
+def test_unclear_provenance_is_blocked_in_every_profile():
+    """A rights holder you cannot name is not fixed by a promise about your conduct."""
+    from samadhvani.data.sources import PROFILES, SOURCES
+
+    unclear = [s for s in SOURCES if s.licence.value == "unclear"]
+    assert unclear, "catalogue should keep at least one unclear source as a warning"
+    for s in unclear:
+        for profile in PROFILES:
+            assert s.permit(profile).may_train is False, (s.key, profile)
+
+
+def test_own_recordings_are_releasable_everywhere():
+    from samadhvani.data.sources import PROFILES, by_key
+
+    own = by_key("own_recordings")
+    for profile in PROFILES:
+        p = own.permit(profile)
+        assert p.may_train and p.may_ship_weights
+
+
+def test_permit_invariants_hold_for_every_source():
+    """Shipping weights implies you were allowed to train; nothing ships what is blocked."""
+    from samadhvani.data.sources import PROFILES, SOURCES
+
+    for s in SOURCES:
+        for profile in PROFILES:
+            p = s.permit(profile)
+            if p.may_ship_weights:
+                assert p.may_train, s.key
+            if p.may_train:
+                assert p.reason, f"{s.key}/{profile} must explain itself"
+
+
+def test_mirrors_are_not_double_counted():
+    """shaivam/astrojyoti/vedaprasar are the same performance; count hours once."""
+    from samadhvani.data.sources import counted
+
+    keys = {s.key for s in counted()}
+    assert "shaivam_samaveda" not in keys
+    assert "pcr_samavedam" in keys
+
+
+def test_aligned_hours_drive_the_claim():
+    """The headline number must be hours with line-level timings, not raw hours.
+
+    IISH is the only large collection that arrives pre-aligned; if it ever loses
+    its transcription the honest ceiling drops from 15.8 h to almost nothing.
+    """
+    from samadhvani.data.sources import audit
+
+    rep = audit(verbose=False)
+    assert rep["audio_hours_aligned"] == 15.8
+    assert rep["audio_hours_trainable"] > rep["audio_hours_aligned"]
+    assert rep["audio_hours_trainable_strict"] == 0.0
+
+    # Every trainable-but-unshippable source must be named, not silently included.
+    assert "iish_samagana" in rep["not_shippable"]
+    assert "own_recordings" not in rep["not_shippable"]
+
+
 # --------------------------------------------------------------------------- #
 # Training (requires torch)
 # --------------------------------------------------------------------------- #
