@@ -78,7 +78,8 @@ class ChantOptions:
     room: float = 0.18
     #: Extra breath length in seconds.
     breath: float = 0.20
-    #: Which engine: "formant" (built in) or "neural" (trained checkpoint).
+    #: Which engine: "formant" (built in), "voice" (trained voice colour, needs a
+    #: checkpoint from ``samadhvani.train.voice_trainer``), or "neural" (legacy v1).
     engine: str = "formant"
     #: Path to a trained checkpoint for engine="neural".
     checkpoint: str | None = None
@@ -305,7 +306,24 @@ def chant(text: str, options: ChantOptions | None = None, **overrides) -> Chant:
                        options=timing_opts, phone_lists=phone_lists)
 
     # 5. render
-    if opts.engine == "neural" and opts.checkpoint:
+    if opts.engine == "voice" and not opts.checkpoint:
+        caveats.append("No checkpoint given for the voice engine; fell back to formant. "
+                       "Train one with samadhvani.train.voice_trainer.")
+    if opts.engine == "voice" and opts.checkpoint:
+        # The trained path: render the rule-engine chant first, then correct its
+        # spectral envelope with the learned voice.  Rendering twice would give two
+        # different timelines and the reported note times would stop being true.
+        from .synth.voice_render import render_voice
+
+        base, sr = synthesize_formant(plan, phone_lists, seed=opts.seed,
+                                      breath=opts.breath, room=0.0)
+        audio, sr = render_voice(plan, phone_lists, opts.checkpoint,
+                                 base_audio=base, seed=opts.seed, room=opts.room)
+        caveats.append(
+            "Voice engine: melody from the svara notation, timbre from the trained "
+            "corpus, phase from harmonic resynthesis. Not a neural vocoder — expect "
+            "a slight edge on sustained notes.")
+    elif opts.engine == "neural" and opts.checkpoint:
         from .synth.neural_render import render_neural
 
         audio, sr = render_neural(plan, phone_lists, opts.checkpoint, seed=opts.seed)

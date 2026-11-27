@@ -43,17 +43,45 @@ from ..text.vikara import SCHOOLS, VIKARAS
 HERE = Path(__file__).parent
 STATIC = HERE / "static"
 
-#: Checkpoint locations tried in order for the neural engine.
+#: Checkpoint locations tried in order for the trained engines.
 CHECKPOINT_CANDIDATES = [
     os.environ.get("SAMADHVANI_CKPT", ""),
+    str(HERE.parent.parent / "checkpoints" / "voice.pt"),
+    str(Path.home() / ".cache" / "samadhvani" / "voice.pt"),
     str(HERE.parent.parent / "checkpoints" / "samadhvani.pt"),
     str(Path.home() / ".cache" / "samadhvani" / "samadhvani.pt"),
 ]
 
 
-def _find_checkpoint() -> str | None:
+def _checkpoint_kind(path: str | None) -> str | None:
+    """Which engine a checkpoint serves: ``"voice"`` or ``"neural"``.
+
+    The two are not interchangeable.  ``voice-color`` v2 checkpoints were trained
+    before alignment and predict a spectral residual, so they must go through the
+    formant renderer; older post-alignment checkpoints drive the neural engine.
+    """
+    if not path:
+        return None
+    try:
+        import torch
+
+        # weights_only=False is required and safe here: the checkpoint carries numpy
+        # arrays (corpus mean spectrum), and torch >= 2.6 defaults weights_only to
+        # True, which raises on those and would make the engine silently disappear.
+        blob = torch.load(path, map_location="cpu", weights_only=False)
+    except Exception:
+        return None
+    if isinstance(blob, dict) and blob.get("kind") == "voice-color":
+        return "voice"
+    return "neural"
+
+
+def _find_checkpoint(kind: str | None = None) -> str | None:
+    """First checkpoint on disk, optionally restricted to one engine."""
     for c in CHECKPOINT_CANDIDATES:
-        if c and Path(c).exists():
+        if not (c and Path(c).exists()):
+            continue
+        if kind is None or _checkpoint_kind(c) == kind:
             return c
     return None
 
@@ -115,13 +143,21 @@ def health():
     except Exception:
         neural = False
     ck = _find_checkpoint()
+    voice_ck = _find_checkpoint("voice")
+    neural_ck = _find_checkpoint("neural")
+    engines = ["formant"]
+    if voice_ck:
+        engines.append("voice")
+    if neural_ck:
+        engines.append("neural")
     return {
         "ok": True,
         "version": __version__,
         "torch_available": neural,
         "checkpoint": ck,
-        "neural_ready": bool(neural and ck),
-        "engines": ["formant"] + (["neural"] if neural and ck else []),
+        "neural_ready": bool(neural and neural_ck),
+        "voice_ready": bool(voice_ck),
+        "engines": engines,
         "modes": ["auto", "style", "samhita", "gana"],
         "models": model_keys(),
     }
@@ -211,10 +247,18 @@ def chant_endpoint(req: ChantRequest):
         raise HTTPException(400, f"unknown school {req.school}; have {sorted(SCHOOLS)}")
     if req.model not in MODELS:
         raise HTTPException(400, f"unknown model {req.model}; have {model_keys()}")
-    if req.engine not in ("formant", "neural"):
-        raise HTTPException(400, "engine must be formant or neural")
+    if req.engine not in ("formant", "voice", "neural"):
+        raise HTTPException(400, "engine must be formant, voice or neural")
 
-    ck = _find_checkpoint()
+    ck = _find_checkpoint(req.engine) if req.engine != "formant" else None
+    if req.engine == "voice" and not ck:
+        raise HTTPException(
+            400,
+            "No voice checkpoint found. Train one with "
+            "`python -m samadhvani.data.build corpus` then "
+            "`python -m samadhvani.data.build f0` and "
+            "`python -m samadhvani.train.voice_trainer`, or use the formant engine.",
+        )
     if req.engine == "neural" and not ck:
         raise HTTPException(
             400,
@@ -259,13 +303,16 @@ def chant_endpoint(req: ChantRequest):
 @app.post("/api/chant.wav")
 def chant_wav(req: ChantRequest):
     """Same as /api/chant but streams a WAV directly, for <audio src> use."""
-    ck = _find_checkpoint()
+    # fall back silently: this endpoint is used directly in an <audio src>
+    engine = "formant" if req.engine not in ("voice", "neural") else req.engine
+    ck = _find_checkpoint(engine)
+    if not ck:
+        engine = "formant"
     opts = ChantOptions(
         mode=req.mode, school=req.school, model=req.model, laya=req.laya,
         tonic_hz=req.tonic_hz, transpose=req.transpose, intensity=req.intensity,
         room=req.room, breath=req.breath,
-        engine="neural" if (req.engine == "neural" and ck) else "formant",
-        checkpoint=ck, seed=req.seed,
+        engine=engine, checkpoint=ck, seed=req.seed,
     )
     try:
         c = chant(req.text, opts)

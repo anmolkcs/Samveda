@@ -340,6 +340,24 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("manifest")
     p.add_argument("-o", "--out", default="models_learned.json")
 
+    p = sub.add_parser("fetch", help="download the IISH sāmagāna clips")
+    p.add_argument("-o", "--out", default="clips")
+    p.add_argument("--clips", default="aligned",
+                   help="'aligned' (clips 1-24, 15.8 h) or 'all' (64 clips, 43 h)")
+    p.add_argument("--pcr", type=int, default=0, metavar="N",
+                   help="also fetch N PCR volumes (complete Kauthuma, no transcript)")
+
+    p = sub.add_parser("corpus", help="segment recordings into a packed training corpus")
+    p.add_argument("inputs", nargs="+", help="audio files")
+    p.add_argument("-o", "--out", default="work/corpus.npz")
+    p.add_argument("--jsonl", default=None)
+    p.add_argument("--hours", type=float, default=4.0,
+                   help="cap the corpus at this many hours (default 4, the Vāgdhenu scale)")
+    p.add_argument("--text", default=None, help="file of gāna lines to supervise melody")
+
+    p = sub.add_parser("f0", help="add per-frame pitch to a packed corpus")
+    p.add_argument("corpus")
+
     p = sub.add_parser("audit", help="show what data exists and what may be used")
     p.add_argument("--profile", default=None,
                    help="intended-use profile: educational (default), open, evaluation")
@@ -354,6 +372,28 @@ def main(argv: list[str] | None = None) -> int:
     elif args.cmd == "contours":
         n = measure_contours(args.manifest, args.out)
         print(f"wrote {n} learned models to {args.out}")
+    elif args.cmd == "fetch":
+        from .dataset import IISH_ALIGNED_CLIPS, fetch_iish, fetch_pcr
+        clips = IISH_ALIGNED_CLIPS
+        if args.clips == "all":
+            clips = tuple(f"SV{i:03d}" for i in range(1, 65))
+        print(f"fetching {len(clips)} IISH clips into {args.out}/")
+        got = fetch_iish(args.out, clips=clips)
+        print(f"got {len(got)}/{len(clips)} clips")
+        if args.pcr:
+            print(f"fetching {args.pcr} PCR volumes into {args.out}/")
+            got += fetch_pcr(args.out, volumes=args.pcr)
+    elif args.cmd == "corpus":
+        from .dataset import build_corpus
+        lines = None
+        if args.text:
+            with open(args.text, encoding="utf-8") as fh:
+                lines = [ln.strip() for ln in fh if ln.strip()]
+        build_corpus(args.inputs, args.out, args.jsonl, text_lines=lines,
+                     max_hours=args.hours)
+    elif args.cmd == "f0":
+        from ..train.voice_trainer import add_f0_to_corpus
+        add_f0_to_corpus(args.corpus)
     elif args.cmd == "audit":
         from .sources import DEFAULT_PROFILE, audit
         audit(profile=args.profile or DEFAULT_PROFILE)

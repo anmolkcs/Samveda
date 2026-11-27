@@ -39,6 +39,8 @@ varying formant track at these transition rates.
 
 from __future__ import annotations
 
+import zlib
+
 import numpy as np
 from scipy.signal import lfilter
 
@@ -312,7 +314,10 @@ class FormantSynth:
             burst_n = max(2, int(0.010 * self.sr))
             burst_n = min(burst_n, n - close_n)
             b, a = _biquad_lowpass(min(locus[1] * 1.6, self.sr * 0.48), self.sr)
-            rng = np.random.default_rng(self.seed + hash(sym) % 1000)
+            # zlib.crc32, not hash(): Python randomises str hashing per process
+            # (PYTHONHASHSEED), so hash(sym) made a seeded synth produce different
+            # audio on every run — and made this burst test flaky 1 run in 5.
+            rng = np.random.default_rng(self.seed + zlib.crc32(sym.encode()))
             burst = lfilter(b, a, rng.standard_normal(burst_n))
             br = float(np.sqrt(np.mean(burst * burst))) or 1.0
             burst *= (0.16 if not aspirated else 0.20) / br
