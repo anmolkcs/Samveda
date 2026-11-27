@@ -61,7 +61,10 @@ Why it matters:
   (`sd_uha`, `sd_uhya`) but *not* timestamped. That gap is the main unsolved task
   in the project, and it is a bounded one.
 
-Per-clip lengths, so you can plan a Kaggle run without downloading 43 GB:
+Per-clip lengths, so you can plan a Kaggle run. **The whole set is only 2.5 GB**
+(128 kbps MP3) — an earlier draft of this file said "43 GB" by confusing hours
+with gigabytes. Disk is not the constraint; RAM is (§6): 15.8 h decoded to
+mono float32 at 22.05 kHz is ~5 GB, which nearly fills a 29 GB Kaggle machine.
 
 | clips | content | hours | avg clip |
 |---|---|---|---|
@@ -226,7 +229,67 @@ than one that quietly does not.
 
 ---
 
-## 6 · Open questions, honestly listed
+## 6 · What it costs to run this on a free Kaggle GPU
+
+**Numbers as measured on Kaggle, Nov 2026.** Quotas change; check your own Settings page.
+
+| resource | free tier | what this project actually needs |
+|---|---|---|
+| GPU | T4 x2 (16 GB each) or P100 (16 GB), ~**30 h/week**, resets weekly | this model is ~2.5 M params: **minutes per epoch**, not hours |
+| session cap | **12 h** (9 h on TPU) | the shipped notebook run is **~3 min of GPU**, nothing near a cap |
+| idle timeout | **20 min** (some pages say 60) | watch this — it is how you silently burn quota |
+| RAM | **29 GB** | 15.8 h decoded to mono float32 @22.05 kHz = **~5 GB**; mel features ~1.6 GB. Stream it, do not load it all |
+| disk in `/kaggle/working` | **20 GB** (saved as output) | IISH is only **2.5 GB**; decoded WAVs for 15.8 h are ~5 GB raw / ~2.2 GB at 16-bit |
+| scratch | ~1 TB, not saved | put intermediates here, copy only the checkpoint out |
+
+### The honest cost of *this* notebook
+
+Approximately **3–5 minutes**, most of it `pip install` and a 60-epoch run on six
+repeated lines. It does not download audio. Running it tells you the pipeline is not
+broken; it does not train a voice.
+
+### The honest cost of a real corpus run — after the loader is built
+
+| stage | machine | estimate |
+|---|---|---|
+| download IISH (43.2 GB? **no — 2.5 GB**) | CPU session, no GPU needed | minutes |
+| decode + mel 15.8 h | CPU, 4 cores | ~20–40 min — **do this on CPU, it costs no GPU quota** |
+| train duration + spectral, 15.8 h | T4 | ~2–6 h (2.5 M params, ~50 k utterances) |
+| evaluate against held-out | T4 | minutes |
+
+So a real run is roughly **one afternoon inside a single 12 h session**, using under a
+third of a week's quota. The constraint was never the GPU.
+
+**Three habits that matter more than the budget:**
+
+1. **Turn the GPU off when you are not training.** An idle GPU session burns the weekly
+   quota. Do data prep and debugging on a CPU session.
+2. **Never do exploration in the GPU session.** If you would not be upset to lose it,
+   it does not belong there.
+3. **Save early to `/kaggle/working`**, or to a Kaggle Dataset you version. When the
+   session ends at hour 12 everything else is gone, and re-downloading is the cheap
+   part — re-training is not.
+
+## 7 · The blocker, stated plainly
+
+Everything above is true *and* none of it can be used yet, because:
+
+* **there is no downloader** — you fetch the 64 clips by hand or with `curl`;
+* **there is no segmenter** — the Iyer stamps say "line N of clip 7 starts at 12:34",
+  and turning that into per-utterance audio files is not implemented;
+* **`build_audio_manifest` needs hand-written sidecars** — one JSON per clip, with
+  `line_starts`;
+* **nothing in training reads a WAV** — the spectral model learns *formant targets from
+  the phone inventory*, not spectra, and `measure_contours` averages the notated svara
+  sequence, not measured pitch.
+
+The practical consequence: a checkpoint trained today sounds exactly the same whether
+the corpus was 0 h or 15.8 h, because the corpus never reaches the optimiser. Closing
+that gap is a focused piece of work — a downloader, a sidecar generator from the Iyer
+stamps, a WAV loader, and a real spectral loss — and it is the next milestone, ahead of
+any further data collection.
+
+## 8 · Open questions, honestly listed
 
 * **Hours of the portal's Jaiminīya collection: unknown.** The index is
   JavaScript-rendered and could not be enumerated here. Somebody should just load
