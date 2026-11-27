@@ -80,6 +80,28 @@ So the full 4-hour run is about **20 minutes of compute**, dominated by download
 pitch tracking — not by the model. Choosing 4 h over 15.8 h saves you roughly 20
 minutes of session quota. It does not save you an experiment.
 
+## 4b · A warning that outranks all of the above
+
+Before spending an hour of quota on a bigger corpus, check that the the *renderer* is
+not the thing you dislike. When this project's own output was reported as "so garbage",
+the corpus size was irrelevant: the vocoder had a phase bug, the correction was applied
+in the wrong coordinate system, and four separate level bugs made the trained render
+14 dB quieter than the engine it replaced. Fixing those took the seven sample verses
+from 93.1 % to 100.0 % melody and brought level within +/-1.2 dB, with **no retraining
+and no extra audio** (see `tests/test_vocode_quality.py`).
+
+So: when a render sounds wrong, measure it before buying a bigger corpus. The metrics
+that separate "the model needs more data" from "the renderer is broken" are:
+
+| symptom | what it means |
+|---|---|
+| melody correct but sound buzzy/metallic | vocoder phase or harmonic placement, not data |
+| quieter and thinner than the rule engine | level/clipping bug, not data |
+| muffled and dark, everything below ~2 kHz | spectral target problem or corpus transfer, not size |
+| genuinely wrong notes | model or alignment |
+
+Only the last one is answered by more hours.
+
 ## 5 · Settle it with one experiment (20 minutes)
 
 The claim "4 h saturates" is testable and you should not take it on faith. One notebook
