@@ -243,10 +243,10 @@ def train_voice(npz: str, out: str, cfg: VoiceConfig | None = None,
     cfg = cfg or VoiceConfig()
     blob = np.load(npz, mmap_mode="r")
     if "f0" not in blob:
-        raise SystemExit("corpus has no f0 track — run add_f0_to_corpus() first")
+        raise ValueError("corpus has no f0 track — call add_f0_to_corpus() first")
     n = blob["mel"].shape[0]
     if n < 6:
-        raise SystemExit(f"corpus has only {n} segments — need at least 6 "
+        raise ValueError(f"corpus has only {n} segments — need at least 6 "
                          "(and more is much better; see docs/DATA-ADDENDUM.md §6)")
 
     mean_spec = corpus_mean_spectrum(npz)

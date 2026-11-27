@@ -384,3 +384,33 @@ def test_server_classifies_a_voice_checkpoint_under_modern_torch(tmp_path, monke
     assert server._find_checkpoint("neural") is None
     engines = server.health()["engines"]
     assert "voice" in engines and "neural" not in engines
+
+
+def test_notebook_entry_points_raise_instead_of_exiting():
+    """Notebook cells must be able to catch these.
+
+    `SystemExit` derives from BaseException, so `except Exception` in a cell does
+    not catch it and the Kaggle kernel dies mid-notebook with no traceback. Any
+    library function a cell calls directly must raise a normal exception.
+    """
+    import numpy as np
+
+    from samadhvani.data.dataset import build_corpus
+    from samadhvani.train.voice_trainer import add_f0_to_corpus, train_voice
+
+    # no audio at all -> caller's problem, not a process-killing exit
+    with pytest.raises(ValueError, match="no segments"):
+        build_corpus([], "/tmp/none.npz", "/tmp/none.jsonl", verbose=False)
+
+    # a 4-segment corpus: too small to train, and built without a pitch track
+    npz = "/tmp/nof0_test.npz"
+    n = 4
+    np.savez_compressed(npz, mel=np.zeros((n, 32, N_MELS), np.float32),
+                        mask=np.ones((n, 32), np.float32),
+                        meta=np.array(["{}"] * n))
+    with pytest.raises(ValueError, match="f0"):
+        train_voice(npz, "/tmp/nof0.pt", verbose=False)
+
+    add_f0_to_corpus(npz, verbose=False)
+    with pytest.raises(ValueError, match="at least 6"):
+        train_voice(npz, "/tmp/nof0.pt", verbose=False)

@@ -267,7 +267,12 @@ def build_corpus(files: list[str], out_npz: str, out_jsonl: str | None = None,
             if used >= budget:
                 break
     if not segs:
-        raise SystemExit("no segments produced — check the audio files")
+        # ValueError, not SystemExit: these functions are called from notebook
+        # cells, where SystemExit tears the kernel down instead of raising a
+        # traceback you can read and retry from.  The CLI entry point converts
+        # this to a non-zero exit status.
+        raise ValueError("no segments produced — check the audio files "
+                         "(are the clips readable, and is internet enabled?)")
 
     # Pad to a fixed frame count so the packed array is rectangular.  Breath groups
     # are mostly 1-6 s; padding to the 95th percentile wastes very little and makes
