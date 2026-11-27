@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Model checkpoints — large, and reproducible from the notebook
+*.pt
+*.pth
+*.ckpt
+*.nemo
+checkpoints/
+
+# Generated audio, corpora and scratch
+*.wav
+*.mp3
+*.flac
+*.ogg
+work/
+manifest.jsonl
+text_corpus.jsonl
+models_learned.json
+samples/*.wav
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Kaggle
+/kaggle/
