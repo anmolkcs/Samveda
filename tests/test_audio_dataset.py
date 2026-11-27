@@ -414,3 +414,140 @@ def test_notebook_entry_points_raise_instead_of_exiting():
     add_f0_to_corpus(npz, verbose=False)
     with pytest.raises(ValueError, match="at least 6"):
         train_voice(npz, "/tmp/nof0.pt", verbose=False)
+
+
+def test_voice_trainer_cli_creates_its_output_directory(tmp_path):
+    """The README tells people to run this; a broken CLI is a broken front door."""
+    import subprocess
+    import sys
+    import os
+
+    from samadhvani.synth.io import write_wav
+    from samadhvani.data.dataset import build_corpus
+
+    chunks = []
+    for laya in (0.26, 0.34, 0.42, 0.50):
+        c = chant("हाउ ४ अ॒ग्निमी॑ळे ३ पु॒रोहि॑तं २ य॒ज्ञस्य॑ १ दे॒वमृ॒त्विक्",
+                  ChantOptions(mode="gana", laya=laya))
+        chunks.append(np.asarray(c.audio, dtype=np.float32))
+    wav = tmp_path / "a.wav"
+    write_wav(str(wav), np.concatenate(chunks), SR)
+    corpus = tmp_path / "c.npz"
+    build_corpus([str(wav)], str(corpus), str(tmp_path / "c.jsonl"),
+                 max_hours=1.0, verbose=False)
+
+    out = tmp_path / "nested" / "voice.pt"
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(p for p in sys.path if p)}
+    r = subprocess.run(
+        [sys.executable, "-m", "samadhvani.train.voice_trainer",
+         "--npz", str(corpus), "--out", str(out), "--epochs", "2", "--device", "cpu"],
+        capture_output=True, text=True, env=env)
+    assert r.returncode == 0, r.stderr[-800:]
+    assert out.exists()
+    assert "val residual L1" in r.stdout
+
+
+def test_voice_trainer_cli_explains_a_missing_corpus(tmp_path):
+    import subprocess
+    import sys
+    import os
+
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(p for p in sys.path if p)}
+    r = subprocess.run(
+        [sys.executable, "-m", "samadhvani.train.voice_trainer",
+         "--npz", str(tmp_path / "nope.npz")],
+        capture_output=True, text=True, env=env)
+    assert r.returncode == 2
+    assert "data.build corpus" in r.stdout + r.stderr
+
+
+# --------------------------------------------------------------------------- #
+# The download path.  This is the one part of the pipeline that talks to
+# archive.org, and the part where a transient failure costs the user 20 minutes.
+# --------------------------------------------------------------------------- #
+
+def _serve(directory):
+    import functools
+    import http.server
+    import socketserver
+    import threading
+
+    class Quiet(http.server.SimpleHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+    srv = socketserver.TCPServer(("127.0.0.1", 0),
+                                 functools.partial(Quiet, directory=str(directory)))
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv, srv.server_address[1]
+
+
+def test_download_fetches_a_decodable_file(tmp_path):
+    import soundfile as sf
+
+    from samadhvani.data.dataset import _download
+
+    t = np.arange(SR * 2) / SR
+    sf.write(tmp_path / "a.mp3", (0.3 * np.sin(2 * np.pi * 146.83 * t)).astype(np.float32),
+             SR, format="MP3")
+    srv, port = _serve(tmp_path)
+    try:
+        out = tmp_path / "got.mp3"
+        _download(f"http://127.0.0.1:{port}/a.mp3", out, min_bytes=100)
+        assert out.stat().st_size > 0
+        x, sr = sf.read(out)
+        assert sr == SR and len(x) == len(t)
+    finally:
+        srv.shutdown()
+
+
+def test_download_rejects_a_200_with_no_body(tmp_path):
+    """archive.org answers 200 with an error page for a missing item.
+
+    Without a size floor that lands on disk as a "clip", and the failure shows up
+    much later as a corpus full of silence.
+    """
+    import pytest
+
+    from samadhvani.data.dataset import _download
+
+    (tmp_path / "tiny.mp3").write_bytes(b"x" * 50)
+    srv, port = _serve(tmp_path)
+    try:
+        out = tmp_path / "got.mp3"
+        with pytest.raises(IOError, match="200"):
+            _download(f"http://127.0.0.1:{port}/tiny.mp3", out, min_bytes=1000,
+                      attempts=1)
+        assert not out.exists(), "a rejected download must not leave a partial file"
+    finally:
+        srv.shutdown()
+
+
+def test_download_retries_then_reports_the_real_error(tmp_path):
+    import pytest
+
+    from samadhvani.data.dataset import _download
+
+    srv, port = _serve(tmp_path)
+    try:
+        with pytest.raises(Exception):
+            _download(f"http://127.0.0.1:{port}/nope.mp3", tmp_path / "o.mp3",
+                      min_bytes=100, attempts=2)
+    finally:
+        srv.shutdown()
+
+
+def test_corpus_reports_how_much_of_the_input_it_used(tmp_path, capsys):
+    """`4 h` should name a quantity people can compare with the 15.8 h they skipped."""
+    from samadhvani.synth.io import write_wav
+    from samadhvani.data.dataset import build_corpus
+
+    c = chant("हाउ ४ अ॒ग्निमी॑ळे ३ पु॒रोहि॑तं २ य॒ज्ञस्य॑ १ दे॒वमृ॒त्विक्",
+              ChantOptions(mode="gana", laya=0.4))
+    wav = tmp_path / "a.wav"
+    write_wav(str(wav), np.asarray(c.audio, dtype=np.float32), SR)
+    build_corpus([str(wav)], str(tmp_path / "c.npz"), max_hours=4.0, verbose=True)
+    out = capsys.readouterr().out
+    assert "of audio" in out and "% of the files given" in out
+    # one short file against a 4 h cap -> say so, instead of implying success
+    assert "cap not reached" in out
