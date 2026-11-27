@@ -414,3 +414,48 @@ def test_notebook_entry_points_raise_instead_of_exiting():
     add_f0_to_corpus(npz, verbose=False)
     with pytest.raises(ValueError, match="at least 6"):
         train_voice(npz, "/tmp/nof0.pt", verbose=False)
+
+
+def test_voice_trainer_cli_creates_its_output_directory(tmp_path):
+    """The README tells people to run this; a broken CLI is a broken front door."""
+    import subprocess
+    import sys
+    import os
+
+    from samadhvani.synth.io import write_wav
+    from samadhvani.data.dataset import build_corpus
+
+    chunks = []
+    for laya in (0.26, 0.34, 0.42, 0.50):
+        c = chant("हाउ ४ अ॒ग्निमी॑ळे ३ पु॒रोहि॑तं २ य॒ज्ञस्य॑ १ दे॒वमृ॒त्विक्",
+                  ChantOptions(mode="gana", laya=laya))
+        chunks.append(np.asarray(c.audio, dtype=np.float32))
+    wav = tmp_path / "a.wav"
+    write_wav(str(wav), np.concatenate(chunks), SR)
+    corpus = tmp_path / "c.npz"
+    build_corpus([str(wav)], str(corpus), str(tmp_path / "c.jsonl"),
+                 max_hours=1.0, verbose=False)
+
+    out = tmp_path / "nested" / "voice.pt"
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(p for p in sys.path if p)}
+    r = subprocess.run(
+        [sys.executable, "-m", "samadhvani.train.voice_trainer",
+         "--npz", str(corpus), "--out", str(out), "--epochs", "2", "--device", "cpu"],
+        capture_output=True, text=True, env=env)
+    assert r.returncode == 0, r.stderr[-800:]
+    assert out.exists()
+    assert "val residual L1" in r.stdout
+
+
+def test_voice_trainer_cli_explains_a_missing_corpus(tmp_path):
+    import subprocess
+    import sys
+    import os
+
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(p for p in sys.path if p)}
+    r = subprocess.run(
+        [sys.executable, "-m", "samadhvani.train.voice_trainer",
+         "--npz", str(tmp_path / "nope.npz")],
+        capture_output=True, text=True, env=env)
+    assert r.returncode == 2
+    assert "data.build corpus" in r.stdout + r.stderr

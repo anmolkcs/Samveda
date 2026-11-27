@@ -36,12 +36,15 @@ The notebook works on CPU too, just slower.
 the notation and F0 is computed exactly. What the model learns is the singer's
 spectral envelope — the part that makes one uḍgātṛ sound unlike another.
 
-| stage | what | time on a T4 session |
+| stage | what | time (measured, mostly CPU) |
 |---|---|---|
 | download 24 clips | ~0.9 GB of MP3 | 2–5 min |
-| segment + pack | 15.8 h → breath groups | 10–20 min (CPU) |
-| pitch track | per-frame F0 | 5–15 min (CPU) |
-| train | ~0.3 M params | 3–10 min |
+| segment + pack | 4 h → ~4 000 breath groups | ~1 min |
+| pitch track | per-frame F0 | ~6 min |
+| train | 0.25 M params, CPU-timed | ~1 min/epoch on CPU, seconds on a T4 |
+
+So a full 4-hour run is roughly **20 minutes of compute**; nearly all of it is the
+download and the pitch track, not the training.
 
 Set `HOURS` below to control how much audio you use. **4 hours is the Vāgdhenu
 scale** and is the default; 15.8 is available and does not need it. Start with 4.
@@ -74,8 +77,12 @@ print("repo:", os.getcwd())
 
 # soundfile decodes MP3 and, crucially, seeks inside it — without it a 44-minute
 # clip has to be decoded whole just to read one phrase.
-subprocess.run([sys.executable, "-m", "pip", "install", "-q",
-                "numpy<2", "scipy", "soundfile"], check=False)
+#
+# Deliberately NOT pinned: `numpy<2` would replace the numpy that Kaggle's own
+# torch/scipy were built against, and pip resolves that by pulling a second scipy
+# too. Nothing here needs numpy 1.x, so leave the image alone.
+subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-U",
+                "soundfile"], check=False)
 
 import numpy as np, torch
 print("torch", torch.__version__, "| cuda", torch.cuda.is_available(),

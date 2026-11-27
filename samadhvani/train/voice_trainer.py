@@ -384,3 +384,45 @@ def load_voice(path: str):
     model.load_state_dict({k: torch.tensor(v) for k, v in blob["voice_state"].items()})
     model.eval()
     return model, np.asarray(blob["mean_spectrum"], dtype=np.float32), cfg
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI: ``python -m samadhvani.train.voice_trainer --npz corpus.npz``."""
+    import argparse
+
+    ap = argparse.ArgumentParser(
+        prog="samadhvani.train.voice_trainer",
+        description="Train the voice-colour model on a packed, pitch-annotated corpus.")
+    ap.add_argument("--npz", required=True, help="packed corpus from `data.build corpus`")
+    ap.add_argument("--out", default="checkpoints/voice.pt", help="checkpoint path")
+    ap.add_argument("--epochs", type=int, default=60)
+    ap.add_argument("--batch-size", type=int, default=16)
+    ap.add_argument("--lr", type=float, default=1e-3)
+    ap.add_argument("--hidden", type=int, default=128)
+    ap.add_argument("--n-layers", type=int, default=3)
+    ap.add_argument("--device", default="auto", help="auto | cpu | cuda")
+    ap.add_argument("--f0-only", action="store_true",
+                    help="just add the pitch track to the corpus and stop")
+    args = ap.parse_args(argv)
+
+    if not Path(args.npz).exists():
+        print(f"no such corpus: {args.npz}\n"
+              "build one first: python -m samadhvani.data.build corpus --hours 4")
+        return 2
+    if args.f0_only:
+        add_f0_to_corpus(args.npz)
+        return 0
+    add_f0_to_corpus(args.npz)
+    m = train_voice(args.npz, args.out,
+                    VoiceConfig(epochs=args.epochs, batch_size=args.batch_size,
+                                lr=args.lr, hidden=args.hidden,
+                                n_layers=args.n_layers, device=args.device))
+    print(f"\nval residual L1 {m['val_residual_l1']:.4f} "
+          f"({m['improvement_pct']:+.1f} % vs the corpus mean)")
+    print(f"next: python -m samadhvani chant \"<gāna text>\" --engine voice "
+          f"--checkpoint {args.out}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

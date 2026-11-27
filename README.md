@@ -127,24 +127,34 @@ panel of 5–8 Sāma reciters.
 
 ## Train it on a free Kaggle GPU
 
-Open [`notebooks/kaggle_samadhvani.ipynb`](notebooks/kaggle_samadhvani.ipynb) — every
-cell of it has been executed end to end. Or:
+Open [`notebooks/kaggle_samadhvani.ipynb`](notebooks/kaggle_samadhvani.ipynb), turn on
+a T4, **Run All**. It downloads the audio itself, so there is nothing to upload and
+nothing to click. Roughly 20 minutes of compute for a 4-hour corpus.
+
+The same thing from a shell:
 
 ```bash
-python -m samadhvani.data.build audit                     # what you may train on
-python -m samadhvani.data.build audit --profile open       # what survives publishing
-python -m samadhvani.data.build text ganam/*.txt -o train.jsonl
-python -m samadhvani.train.trainer --manifest train.jsonl --out samadhvani.pt
-samadhvani chant "…" --engine neural --checkpoint samadhvani.pt
+python -m samadhvani.data.build fetch --clips aligned     # 24 clips, 0.9 GB, resumable
+python -m samadhvani.data.build corpus --hours 4          # -> corpus.npz
+python -m samadhvani.data.build f0                        # pitch track, once
+python -m samadhvani.train.voice_trainer --npz corpus.npz --out voice.pt
+samadhvani chant "…" --engine voice --checkpoint voice.pt
 ```
 
-What trains, and what does not:
+What the trained model actually learns, and what it does not:
 
-| | learns | params | time on a T4 |
+| | learned from audio? | where it comes from | params |
 |---|---|---|---|
-| `DurationPredictor` | how long each phone is held | ~0.4 M | minutes |
-| `SpectrogramModel` | F1/F2/F3 + voice/noise per frame | ~2.5 M | well under an hour |
-| F0 | *nothing — computed from the svaras* | — | — |
+| spectral envelope (timbre) | **yes** | 4 h of IISH sāmagāna | 0.25 M |
+| F0, duration, svaras, tonic | no | computed exactly from the notation | — |
+
+That split is the design, not a shortcut. Because pitch and timing are solved rather
+than learned, a quarter-million parameters are enough for one voice, training finishes
+in minutes, and the melody cannot degrade — the render is verified note by note.
+
+**How much audio?** 4 h, which is the Vāgdhenu scale. The reasoning, the measured
+runtimes, and a 20-minute experiment that settles the question on your own data are in
+[`docs/HOW-MUCH-AUDIO.md`](docs/HOW-MUCH-AUDIO.md).
 
 ## The data question (read this before training)
 
@@ -240,15 +250,20 @@ pytest -q          # 145 passed
   their pitch skeleton. `samadhvani.data.build contours` can replace them with measured
   ones — but it averages the **notated svara sequence**, which is already in the text.
   It is not a pitch tracker, and no audio is read.
-* **The audio is not loadable yet.** The survey located 67 h of sāmagāna, but
-  `build_audio_manifest` still expects you to have cut clips and written JSON sidecars
-  with line timings by hand. **There is no downloader and no segmenter.** Nothing reads
-  a WAV: the spectral model trains on formant targets from `phones/inventory.py`, so a
-  model trained today sounds the same whether you fed it 0 h or 15.8 h. That is the
-  single biggest gap in the project — see `docs/DATA-ADDENDUM.md` §7 for what closing
-  it requires.
-* **The Kaggle notebook does no data acquisition.** It builds a text corpus from a
-  six-line sample and trains on it. It is a pipeline check, not a corpus run.
+* **The model learns timbre, not melody.** Segmentation is by breath, so a training
+  segment is "this singer, singing something, at this pitch". Nothing tells the model
+  *which* gāna it is hearing, so it cannot learn melody from audio. Melody comes from
+  the notation, which is exact but only exists for notated text. Closing this needs
+  the Iyer timestamps transcribed — a language job, not a GPU job; see
+  `docs/DATA-ADDENDUM.md` §7.
+* **Phase is resynthesised.** The vocoder is a harmonic synthesiser driven by the
+  measured F0, so sustained notes have a slight synthetic edge compared with a neural
+  vocoder. That is the next model to train, and 15.8 h is the right corpus for it.
+* **The reference-system comparison is not like for like.** Vāgdhenu is an end-to-end
+  flow-matching TTS with tens of millions of parameters and a fine-tuned neural vocoder;
+  this is a rule engine plus a 0.25 M envelope model. The audio budget is comparable,
+  the models are not, and `docs/HOW-MUCH-AUDIO.md` says so rather than borrowing
+  credibility from the comparison.
 * **The Jaiminīya and Rāṇāyanīya traditions** are represented by their stobha inventories
   and register, not by measured contours. Merging schools would be a factual error, so
   they stay separate even where the data is thin. Concretely: all 15.8 aligned hours are
