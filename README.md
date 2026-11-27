@@ -237,8 +237,18 @@ pytest -q          # 145 passed
   baseline-beating default — not a pre-trained voice. The formant engine is what you
   hear out of the box, and it sounds like a chant, not a singer.
 * **The melodic skeletons are prior knowledge**, reduced from published gāna contours to
-  their pitch skeleton. With recordings, `samadhvani.data.build contours` replaces them
-  with measured ones.
+  their pitch skeleton. `samadhvani.data.build contours` can replace them with measured
+  ones — but it averages the **notated svara sequence**, which is already in the text.
+  It is not a pitch tracker, and no audio is read.
+* **The audio is not loadable yet.** The survey located 67 h of sāmagāna, but
+  `build_audio_manifest` still expects you to have cut clips and written JSON sidecars
+  with line timings by hand. **There is no downloader and no segmenter.** Nothing reads
+  a WAV: the spectral model trains on formant targets from `phones/inventory.py`, so a
+  model trained today sounds the same whether you fed it 0 h or 15.8 h. That is the
+  single biggest gap in the project — see `docs/DATA-ADDENDUM.md` §7 for what closing
+  it requires.
+* **The Kaggle notebook does no data acquisition.** It builds a text corpus from a
+  six-line sample and trains on it. It is a pipeline check, not a corpus run.
 * **The Jaiminīya and Rāṇāyanīya traditions** are represented by their stobha inventories
   and register, not by measured contours. Merging schools would be a factual error, so
   they stay separate even where the data is thin. Concretely: all 15.8 aligned hours are
