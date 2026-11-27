@@ -341,6 +341,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("-o", "--out", default="models_learned.json")
 
     p = sub.add_parser("audit", help="show what data exists and what may be used")
+    p.add_argument("--profile", default=None,
+                   help="intended-use profile: educational (default), open, evaluation")
     args = ap.parse_args(argv)
 
     if args.cmd == "text":
@@ -353,8 +355,8 @@ def main(argv: list[str] | None = None) -> int:
         n = measure_contours(args.manifest, args.out)
         print(f"wrote {n} learned models to {args.out}")
     elif args.cmd == "audit":
-        from .sources import audit
-        audit()
+        from .sources import DEFAULT_PROFILE, audit
+        audit(profile=args.profile or DEFAULT_PROFILE)
     return 0
 
 

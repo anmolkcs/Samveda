@@ -100,20 +100,29 @@ cells.append(md("""
 
 Two very different resources, and only one of them is the bottleneck:
 
-* **Text — easy and open.** The four Sāma-gāna books (Grāma-geya 1,198 gāna,
-  Āraṇyaka 296, Ūha 936, Ūhya 209) are typed with Vedic accents and sāma numerals on
-  Sanskrit Documents; the Vedic Heritage Portal carries the Kauthuma saṃhitā. That is
-  roughly **7,500 gāna of fully-licensed training text**.
-* **Audio — hard.** There is no large open Sāma recitation corpus. The Vedic Heritage
-  Portal recordings are excellent and are *not* licensed for training. YouTube uploads
-  are per-video and usually unstated.
+* **Text — complete and free.** The four Sāma-gāna books (Grāma-geya 1,198 gāna,
+  Āraṇyaka 296, Ūha 936, Ūhya 209) were typeset with Vedic accents and sāma numerals in
+  January 2025. That is the whole Kauthuma corpus: **2,639 gāna**. "Free" is not "open":
+  the typesetting is `PPN ©` and the download terms are fair-use-for-education.
+* **Audio — 67 h, none of it openly licensed.** The find is IISH's complete Kauthuma
+  sāmagāna (43.2 h, archive.org since 2013), whose transcription carries clip numbers
+  and minute:second stamps — so **15.8 h arrive pre-aligned**, three times what the
+  Vāgdhenu paper used, with no annotation work.
 
-Run the audit and see the numbers.
+**Two axes, kept apart.** *May I redistribute?* is a licence question; *may I train on
+it and run it for teaching?* is an intended-use question. Under the default
+`educational` profile (not distributed, not commercial) ~67 h are trainable. None of it
+is shippable.
+
+Run the audit and see both numbers.
 """))
 
 cells.append(code("""
 from samadhvani.data.sources import audit
-report = audit()
+report = audit()                 # educational profile, the default
+report_open = audit(verbose=False, profile="open")   # what survives publication
+print("trainable:", report["audio_hours_trainable"], "h")
+print("releasable:", report_open["audio_hours_trainable"], "h  <- publish this and your corpus vanishes")
 """))
 
 cells.append(md("""

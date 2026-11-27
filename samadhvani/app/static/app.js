@@ -276,24 +276,33 @@ async function loadData() {
     const d = await (await fetch('/api/data')).json();
     const r = d.report || {};
     $('dataSummary').innerHTML =
-      `<span class="big">${(r.audio_hours_trainable || 0).toFixed(1)} h</span> of audio usable for training ·
-       <span class="big">${(r.audio_hours_releasable || 0).toFixed(1)} h</span> redistributable ·
-       <span class="big">${r.total_ganas_in_text || 0}</span> gāna in text, across
-       ${(r.text_with_svara || []).length} sources with svara notation`;
+      `<span class="big">${(r.audio_hours_trainable || 0).toFixed(1)} h</span> of sāmagāna trainable
+       under the <b>${r.profile}</b> profile
+       (${(r.audio_hours_aligned || 0).toFixed(1)} h with line-level timings) ·
+       <span class="big">${(r.audio_hours_releasable || 0).toFixed(1)} h</span> openly licensed ·
+       <span class="big">${r.total_ganas_in_text || 0}</span> gāna in text<br>
+       <span class="small">Two independent questions, kept apart: <b>may train</b> is what this
+       profile allows, <b>may ship</b> is what a licence allows. Nothing here may be
+       redistributed. The profile is a promise about your conduct, not a licence.</span>`;
     let html = `<table><thead><tr>
-      <th>source</th><th>kind</th><th>licence</th><th>hrs</th><th>text</th><th>train</th><th>ship</th><th>note</th>
+      <th>source</th><th>kind</th><th>licence</th><th>hrs</th><th>aligned</th><th>text</th>
+      <th>may train</th><th>may ship</th><th>note</th>
     </tr></thead><tbody>`;
     for (const s of d.sources) {
       const cls = s.licence === 'open' ? 'yes'
         : (s.licence === 'unclear' ? 'no' : (s.licence === 'permission' ? 'warn' : 'off'));
+      const text = s.ganas ? `${s.ganas} gāna`
+        : (s.verses ? `${s.verses} ṛc` : '—');
+      const mirror = s.duplicate_of ? '<span class="pill warn">mirror</span> ' : '';
       html += `<tr>
         <td>${s.url ? `<a href="${s.url}" target="_blank" rel="noopener">${s.name}</a>` : s.name}</td>
         <td class="mono">${s.kind}</td>
         <td><span class="pill ${cls}">${s.licence}</span></td>
         <td class="mono">${s.hours ? s.hours.toFixed(1) : '—'}</td>
-        <td class="mono">${s.verses || '—'}${s.svara_notation ? ' ᭄' : ''}</td>
-        <td>${s.train ? '<span class="pill yes">yes</span>' : '<span class="pill no">no</span>'}</td>
-        <td>${s.ship ? '<span class="pill yes">yes</span>' : '<span class="pill no">no</span>'}</td>
+        <td class="mono">${s.aligned_hours ? s.aligned_hours.toFixed(1) : '—'}</td>
+        <td class="mono">${mirror}${text}${s.svara_notation ? ' ᭄' : ''}</td>
+        <td title="${s.permit_reason || ''}">${s.may_train ? '<span class="pill yes">yes</span>' : '<span class="pill no">no</span>'}</td>
+        <td>${s.may_ship_weights ? '<span class="pill yes">yes</span>' : '<span class="pill no">no</span>'}</td>
         <td class="small">${s.notes}</td>
       </tr>`;
     }

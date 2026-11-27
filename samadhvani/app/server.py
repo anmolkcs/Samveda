@@ -31,7 +31,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .. import __version__
-from ..data.sources import SOURCES, audit
+from ..data.sources import DEFAULT_PROFILE, PROFILES, SOURCES, audit
 from ..eval.metrics import evaluate
 from ..models.sama_models import MODELS, model_keys
 from ..pipeline import ChantOptions, chant
@@ -153,16 +153,36 @@ def samples():
 
 
 @app.get("/api/data")
-def data_audit():
-    rep = audit(verbose=False)
+def data_audit(profile: str = DEFAULT_PROFILE):
+    """The data audit.  ``profile`` is an intended-use profile, not a licence filter.
+
+    Two booleans are returned per source on purpose: ``train``/``ship`` are the
+    strict licence answer, ``may_train``/``may_ship_weights`` are the answer under
+    the requested profile.  A source can be ``train: false, may_train: true`` and
+    that is the whole point — usable for teaching, not licensed for release.
+    """
+    if profile not in PROFILES:
+        raise HTTPException(400, f"unknown profile {profile!r}; choose from {sorted(PROFILES)}")
+    rep = audit(verbose=False, profile=profile)
     return {
         "report": rep,
+        "profiles": [
+            {"key": p.key, "name": p.name, "distributes": p.distributes,
+             "commercial": p.commercial, "note": p.note}
+            for p in PROFILES.values()
+        ],
         "sources": [
             {"key": s.key, "name": s.name, "url": s.url, "kind": s.kind,
              "licence": s.licence.value, "school": s.school, "hours": s.est_hours,
-             "verses": s.est_verses, "svara_notation": s.has_svara_notation,
-             "notes": s.notes,
-             "train": s.usable_for_training, "ship": s.usable_for_release}
+             "verses": s.est_verses, "ganas": s.est_ganas,
+             "aligned_hours": s.est_aligned_hours,
+             "svara_notation": s.has_svara_notation,
+             "notes": s.notes, "rights_basis": s.rights_basis,
+             "duplicate_of": s.duplicate_of,
+             "train": s.usable_for_training, "ship": s.usable_for_release,
+             "may_train": s.permit(profile).may_train,
+             "may_ship_weights": s.permit(profile).may_ship_weights,
+             "permit_reason": s.permit(profile).reason}
             for s in SOURCES
         ],
     }

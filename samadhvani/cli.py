@@ -79,9 +79,14 @@ def cmd_eval(args) -> int:
 
 
 def cmd_audit(args) -> int:
-    from .data.sources import audit
+    from .data.sources import DEFAULT_PROFILE, PROFILES, audit
 
-    audit()
+    profile = getattr(args, "profile", None) or DEFAULT_PROFILE
+    if profile not in PROFILES:
+        print(f"unknown profile {profile!r}; choose from {', '.join(PROFILES)}",
+              file=sys.stderr)
+        return 2
+    audit(profile=profile)
     return 0
 
 
@@ -131,6 +136,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_eval)
 
     p = sub.add_parser("audit", help="what data exists and what may be trained on")
+    p.add_argument("--profile", default=None,
+                   help="intended-use profile: educational (default), open, evaluation")
     p.set_defaults(func=cmd_audit)
 
     p = sub.add_parser("serve", help="run the web demo")
